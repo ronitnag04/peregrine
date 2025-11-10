@@ -17,7 +17,7 @@ class Cache:
         self,
         associativity: int = 1,     # direct mapped
         line_size: int = 64,        # 64 bytes
-        total_size: int = 16000,    # 16 kB
+        total_size: int = 16384,    # 16 kB
         replacement_policy: Callable[[NDArray[np.uint64], NDArray[np.bool], NDArray[np.uint32], np.uint32, np.uint64], tuple[bool, bool, int]] = ReplacementPolicy.LRU,
         address_bits: int = 64,     # 64 bit address space
         read_latency: int = 4,      # 4 cycles
@@ -64,13 +64,20 @@ class Cache:
         self.parent: Cache | None = parent
     
     """
+    Gets a given address's tag, index, and offset.
+    """
+    def get_address_parts(self, address: np.uint64):
+        offset = address & np.uint64(2**self.offset_bits - 1)
+        index = (address >> np.uint64(self.offset_bits)) & np.uint64(2**self.index_bits - 1)
+        tag = (address >> np.uint64(self.index_bits + self.offset_bits)) # should be the rest of the address
+        return tag, index, offset
+        
+    """
     Simulates a cache read using the configured replacement policy, forwarding requests to
     higher level caches if needed. Returns total read latency for given address.
     """
     def read(self, address: np.uint64) -> int:
-        offset = address & (2**self.offset_bits - 1)
-        index = (address >> self.offset_bits) & (2**self.index_bits - 1)
-        tag = (address >> (self.index_bits + self.offset_bits)) # should be the rest of the address
+        tag, index, _ = self.get_address_parts(address)
         
         if self.associativity == 1:
             # No replacement policy needed for a direct mapped cache
@@ -123,9 +130,7 @@ class Cache:
     to higher level caches if needed. Returns total write latency for given address.
     """
     def write(self, address: np.uint64) -> int:
-        offset = address & (2**self.offset_bits - 1)
-        index = (address >> self.offset_bits) & (2**self.index_bits - 1)
-        tag = (address >> (self.index_bits + self.offset_bits)) # should be the rest of the address
+        tag, index, _ = self.get_address_parts(address)
         
         if self.associativity == 1:
             # No replacement policy needed for a direct mapped cache
