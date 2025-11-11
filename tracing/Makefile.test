@@ -1,0 +1,29 @@
+# Makefile for building the assembly test files
+
+CC = gcc
+
+# C-callable version
+TEST_C_SRC = test_trace_c.s
+TEST_C_C = test_trace_c.c
+TEST_C_OBJ = test_trace_c.o
+TEST_C_BIN = test_trace_c
+
+.PHONY: all clean test
+
+all: $(TEST_C_BIN)
+
+$(TEST_C_BIN): $(TEST_C_C) $(TEST_C_SRC)
+	$(CC) -o $(TEST_C_BIN) $(TEST_C_C) $(TEST_C_SRC)
+
+clean:
+	rm -f $(TEST_C_OBJ) $(TEST_C_BIN)
+
+test: $(TEST_C_BIN)
+	@echo "Running test binary..."
+	./$(TEST_C_BIN)
+	@echo "Exit code: $$?"
+
+verify: trace.csv
+	@echo "Verifying trace.csv..."
+	@python3 verify_trace.py trace.csv
+
