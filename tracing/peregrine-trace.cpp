@@ -33,7 +33,7 @@ typedef struct {
   std::string assembly;
   std::string category;
   std::string opcode;
-  std::string branch_type; // direct unconditional, direct conditional, indirect
+  std::string branch_type; // direct_unconditional, direct_conditional, indirect
   bool inst_sync;          // true if the instruction is a sync point
   std::vector<std::string> read_registers;
   std::vector<std::string> write_registers;
@@ -326,9 +326,9 @@ VOID trace_instr(INS ins, VOID* v)
     if (INS_IsBranch(ins)) {
       if (INS_IsDirectBranch(ins)) {
         if (INS_HasFallThrough(ins)) {
-          id->branch_type = "direct conditional";
+          id->branch_type = "direct_conditional";
         } else {
-          id->branch_type = "direct unconditional";
+          id->branch_type = "direct_unconditional";
         }
       } else {
         id->branch_type = "indirect";
@@ -341,7 +341,8 @@ VOID trace_instr(INS ins, VOID* v)
     UINT32 maxReadRegs = INS_MaxNumRRegs(ins);
     for (UINT32 i = 0; i < maxReadRegs; i++) {
         REG reg = INS_RegR(ins, i);
-        std::string reg_name = REG_StringShort(reg);
+        REG full_reg = REG_FullRegName(reg);
+        std::string reg_name = REG_StringShort(full_reg);
         id->read_registers.push_back(reg_name);
         // Dependency tracking moved to log_instruction() for execution-time accuracy
     }
@@ -351,7 +352,8 @@ VOID trace_instr(INS ins, VOID* v)
     UINT32 maxWriteRegs = INS_MaxNumWRegs(ins);
     for (UINT32 i = 0; i < maxWriteRegs; i++) {
         REG reg = INS_RegW(ins, i);
-        std::string reg_name = REG_StringShort(reg);
+        REG full_reg = REG_FullRegName(reg);
+        std::string reg_name = REG_StringShort(full_reg);
         id->write_registers.push_back(reg_name);
         // last_reg_write_ip update moved to log_instruction() for execution-time accuracy
     }
@@ -402,8 +404,8 @@ VOID Fini(INT32 code, VOID* v)
   
   trace = fopen("trace_summary.txt", "w");
   fprintf(trace, "Number of instruction sync points: %u\n", num_inst_syncs);
-  fprintf(trace, "Number of direct unconditional branches: %u\n", branch_type_counts.count("direct unconditional") ? branch_type_counts["direct unconditional"] : 0);
-  fprintf(trace, "Number of direct conditional branches: %u\n", branch_type_counts.count("direct conditional") ? branch_type_counts["direct conditional"] : 0);
+  fprintf(trace, "Number of direct unconditional branches: %u\n", branch_type_counts.count("direct_unconditional") ? branch_type_counts["direct_unconditional"] : 0);
+  fprintf(trace, "Number of direct conditional branches: %u\n", branch_type_counts.count("direct_conditional") ? branch_type_counts["direct_conditional"] : 0);
   fprintf(trace, "Number of indirect branches: %u\n", branch_type_counts.count("indirect") ? branch_type_counts["indirect"] : 0);
   fclose(trace);
 }

@@ -91,10 +91,10 @@ gcc -o test_trace_c test_trace_c.c test_trace_c.s
 The trace should show:
 
 1. **IP addresses** for every instruction
-2. **Branch types**: "direct unconditional", "direct conditional", "indirect"
+2. **Branch types**: "direct_unconditional", "direct_conditional", "indirect"
 3. **Instruction sync**: "true" for MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP
-4. **Read registers**: e.g., "rax", "rbx", etc.
-5. **Write registers**: e.g., "rax", "rbx", etc.
+4. **Read registers**: e.g., "rax", "rbx", etc. (partial registers like EAX, AX, AL are normalized to their full register, e.g., RAX)
+5. **Write registers**: e.g., "rax", "rbx", etc. (partial registers are normalized to full registers for accurate dependency tracking)
 6. **Register dependent IPs**: IPs of instructions that wrote registers being read
 7. **Read addresses**: Memory addresses being read (format: `0xADDR(SIZE)`)
 8. **Write addresses**: Memory addresses being written (format: `0xADDR(SIZE)`)
@@ -117,7 +117,7 @@ make -f Makefile.test verify
 The verification script checks:
 
 1. **IP Tracking**: All instructions have IP addresses
-2. **Branch Types**: Direct unconditional, direct conditional, and indirect branches
+2. **Branch Types**: "direct_unconditional", "direct_conditional", "indirect"
 3. **Sync Barriers**: MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP are marked as sync
 4. **Register Operations**: Register reads and writes are tracked
 5. **Register Dependencies**: Instructions show dependencies on previous instructions that wrote the registers they read
