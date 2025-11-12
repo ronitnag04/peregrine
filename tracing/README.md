@@ -10,7 +10,7 @@ The tracing tool instruments programs at runtime and generates a comprehensive C
 - **Assembly Code**: Disassembled instruction text
 - **Instruction Categories**: High-level category (e.g., BINARY, DATAXFER, CONTROL)
 - **Opcodes**: Specific instruction opcodes
-- **Branch Types**: Classification of branches (direct unconditional, direct conditional, indirect)
+- **Branch Types**: Classification of branches (direct_unconditional, direct_conditional, indirect)
 - **Synchronization Barriers**: Detection of memory fences, atomic operations, and serializing instructions
 - **Register Operations**: Registers read and written by each instruction
 - **Memory Operations**: Memory addresses read from and written to
@@ -24,8 +24,8 @@ The tracing tool instruments programs at runtime and generates a comprehensive C
 - Tracks instruction categories and opcodes
 
 ### Branch Analysis
-- **Direct Unconditional Branches**: Direct jumps (e.g., `jmp label`)
-- **Direct Conditional Branches**: Conditional jumps (e.g., `jne`, `je`)
+- **Direct Unconditional Branches**: Direct jumps (e.g., `jmp label`) - tracked as "direct_unconditional"
+- **Direct Conditional Branches**: Conditional jumps (e.g., `jne`, `je`) - tracked as "direct_conditional"
 - **Indirect Branches**: Branches through registers or memory (e.g., `jmp *%rax`)
 
 ### Synchronization Barriers
@@ -124,8 +124,8 @@ Each row in `trace.csv` represents one executed instruction with the following f
 - **Opcode**: Instruction opcode (e.g., MOV, ADD, JMP)
 - **Branch Type**: Branch classification (empty for non-branches)
 - **Instruction Sync**: "true" if instruction is a synchronization barrier, "false" otherwise
-- **Read Registers**: Semicolon-separated list of registers read (e.g., "rax;rbx")
-- **Write Registers**: Semicolon-separated list of registers written
+- **Read Registers**: Semicolon-separated list of registers read (e.g., "rax;rbx"). Partial registers (e.g., EAX, AX, AL) are normalized to their full register (e.g., RAX) for accurate dependency tracking.
+- **Write Registers**: Semicolon-separated list of registers written. Partial registers are normalized to full registers.
 - **Register Dependent IPs**: Semicolon-separated list of IPs of instructions that wrote registers read by this instruction
 - **Read Addresses**: Semicolon-separated list of memory addresses read (format: `0xADDR(SIZE)`)
 - **Write Addresses**: Semicolon-separated list of memory addresses written (format: `0xADDR(SIZE)`)
@@ -167,7 +167,7 @@ python3 verify_trace.py trace.csv
 
 The verification script checks:
 - IP tracking for all instructions
-- Branch type detection (direct unconditional, direct conditional, indirect)
+- Branch type detection (direct_unconditional, direct_conditional, indirect)
 - Synchronization barrier detection
 - Register read/write tracking
 - Register dependency tracking
@@ -201,6 +201,7 @@ Number of indirect branches: 1
 ## Notes
 
 - The tracing tool tracks dependencies at **execution time**, not instrumentation time, ensuring accurate dependency information even with out-of-order execution or optimizations.
+- **Register normalization**: Partial registers (e.g., EAX, AX, AL, AH) are normalized to their full register (e.g., RAX) using `REG_FullRegName()` before tracking. This ensures that all operations on the same architectural register are correctly tracked for dependency analysis.
 - Memory write tracking handles overlapping writes correctly by splitting memory ranges.
 - The tool may significantly slow down program execution due to the overhead of instrumentation.
 - Large programs may generate very large trace files.
