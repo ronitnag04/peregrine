@@ -15,14 +15,14 @@ class Cache:
     
     def __init__(
         self,
-        associativity: int = 1,     # direct mapped
-        line_size: int = 64,        # 64 bytes
-        total_size: int = 16384,    # 16 kB
+        associativity: int = 1,         # direct mapped
+        line_size: int = 64,            # 64 bytes
+        total_size: int = 16384,        # 16 kB
         replacement_policy: Callable[[NDArray[np.uint64], NDArray[np.bool], NDArray[np.uint32], np.uint32, np.uint64], tuple[bool, bool, int]] = ReplacementPolicy.LRU,
-        address_bits: int = 64,     # 64 bit address space
-        read_latency: int = 4,      # 4 cycles
-        write_latency: int = 0,     # assume this is masked by a store buffer
-        parent: Cache | None = None # parent cache to send misses and write back to, if None, assumes a main memory access
+        address_bits: int = 64,         # 64 bit address space
+        read_latency: int = 4,          # 4 cycles
+        write_latency: int = 0,         # assume this is masked by a store buffer
+        parent: 'Cache | None' = None   # parent cache to send misses and write back to, if None, assumes a main memory access
     ):
         # Check and initialize sizing
         if address_bits & (address_bits - 1) != 0:

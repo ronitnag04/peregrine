@@ -6,7 +6,7 @@ from evantrace.replacement_policies import ReplacementPolicy
 
 MAIN_MEMORY_LATENCY = 100
 
-class TestCache(unittest.TestCase):
+class Test4WayLRUCache(unittest.TestCase):
     """
     Tests the Cache class.
     """
@@ -50,7 +50,7 @@ class TestCache(unittest.TestCase):
         # --- Pre-load a line into the cache to test hits ---
         
         # We'll pick an address
-        self.test_addr = np.uint64(0x12345000DECAFBAD)
+        self.test_addr_hit = np.uint64(0x12345000DECAFBAD)
         self.test_addr_miss = np.uint64(0xFEEDFACECAFEBABE)
         
         # Manually calculate its parts based on our geometry
@@ -71,6 +71,35 @@ class TestCache(unittest.TestCase):
         # [3, 2, 1, 0] -> [3, 2, 1, 0] (no change)
         # Let's just set it to 0
         self.cache.metadata[test_index] = np.array([3, 2, 1, 0], dtype=np.uint32)
+        
+        # --- Define an address for misses ---
+        self.test_addr_miss = np.uint64(0xFEEDFACECAFEBABE)
+        # Ensure this address is not the same as the hit address
+        # by checking tag and index
+        self.assertNotEqual(
+            self.cache.get_address_parts(self.test_addr_hit),
+            self.cache.get_address_parts(self.test_addr_miss),
+            "Test hit and miss addresses map to the same set and tag!"
+        )
+
+        # --- Define addresses for set fill and eviction test ---
+        # We need 5 addresses that map to the *same index* but *different tags*.
+        # Our index bits = 6. Let's pick index 0x1A (26).
+        # Offset bits = 6.
+        # Addr = (Tag << 12) | (Index << 6) | (Offset)
+        
+        self.fill_addrs = []
+        base_addr = (0x1A << 6) # Index 0x1A, Offset 0
+        for i in range(1, 5): # Tags 1, 2, 3, 4
+            self.fill_addrs.append( (i << 12) | base_addr )
+        
+        # This will be the 5th address to trigger eviction
+        self.evict_addr = np.uint64((5 << 12) | base_addr) # Tag 5
+        
+        # Verify all addresses map to the same index
+        idx_set = set(self.cache.get_address_parts(addr)[1] for addr in self.fill_addrs)
+        idx_set.add(self.cache.get_address_parts(self.evict_addr)[1])
+        self.assertEqual(len(idx_set), 1, "Fill/Evict addresses do not map to the same set")
 
 
     def test_simple_read_hit_latency(self):
@@ -138,6 +167,61 @@ class TestCache(unittest.TestCase):
         latency = self.cache.read(self.test_addr_miss)
         
         self.assertEqual(latency, expected_latency)
+        
+    def test_set_fill_and_eviction(self):
+            """
+            Tests filling a set to capacity and then evicting a line.
+            Uses the LRU replacement policy.
+            """
+            miss_latency = self.read_latency + MAIN_MEMORY_LATENCY
+            hit_latency = self.read_latency
+            
+            # --- 1. Fill the set (4 lines) ---
+            # These should all be misses
+            for i, addr in enumerate(self.fill_addrs):
+                lat = self.cache.read(addr)
+                self.assertEqual(lat, miss_latency, f"Fill address {i} was not a miss")
+            
+            # After this, the LRU state for the set should be:
+            # fill_addrs[0] = age 3 (LRU)
+            # fill_addrs[1] = age 2
+            # fill_addrs[2] = age 1
+            # fill_addrs[3] = age 0 (MRU)
+            
+            # --- 2. Check for hits ---
+            # Reading them all again should all be hits
+            for i, addr in enumerate(self.fill_addrs):
+                lat = self.cache.read(addr)
+                self.assertEqual(lat, hit_latency, f"Hit check address {i} was not a hit")
+                
+            # After this, the LRU state for the set should be:
+            # fill_addrs[0] = age 3 (LRU)
+            # fill_addrs[1] = age 2
+            # fill_addrs[2] = age 1
+            # fill_addrs[3] = age 0 (MRU)
+            # (This is because we read them in the same order)
+    
+            # --- 3. Evict an entry ---
+            # Accessing a 5th address in the same set should be a miss
+            # and should evict the LRU line (fill_addrs[0])
+            lat = self.cache.read(self.evict_addr)
+            self.assertEqual(lat, miss_latency, "Eviction access was not a miss")
+            
+            # New LRU state:
+            # fill_addrs[1] = age 3 (LRU)
+            # fill_addrs[2] = age 2
+            # fill_addrs[3] = age 1
+            # evict_addr  = age 0 (MRU)
+            
+            # --- 4. Check that the victim is gone ---
+            # Accessing the original LRU line (fill_addrs[0]) should now be a miss
+            lat = self.cache.read(self.fill_addrs[0])
+            self.assertEqual(lat, miss_latency, "Victim was not evicted (LRU error)")
+            
+            # --- 5. Check that non-victims are still present ---
+            # Accessing any other line (e.g., fill_addrs[3]) should still be a hit
+            lat = self.cache.read(self.fill_addrs[3])
+            self.assertEqual(lat, hit_latency, "A non-victim line was evicted")
 
 
 def run_tests():
@@ -146,7 +230,7 @@ def run_tests():
     suite = unittest.TestSuite()
     
     # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestCache))
+    suite.addTests(loader.loadTestsFromTestCase(Test4WayLRUCache))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
