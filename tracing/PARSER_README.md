@@ -39,7 +39,7 @@ typedef struct {
     std::string assembly;                      // Assembly code
     std::string category;                      // Instruction category (e.g., DATAXFER, CALL)
     std::string opcode;                        // Instruction opcode (e.g., MOV, CALL_NEAR)
-    std::string branch_type;                   // Branch type (direct conditional, direct unconditional, indirect, or empty)
+    std::string branch_type;                   // Branch type (direct_conditional, direct_unconditional, indirect, or empty)
     bool inst_sync;                            // True if instruction is a synchronization point
     std::vector<std::string> read_registers;    // Registers read by the instruction
     std::vector<std::string> write_registers;   // Registers written by the instruction
@@ -130,12 +130,12 @@ Instruction 0:
   Opcode: MOV
   Branch Type: (none)
   Instruction Sync: false
-  Read Registers (1): rsp
-  Write Registers (1): rdi
-  Register Dependent IPs (0): (none)
-  Read Addresses (0): (none)
-  Write Addresses (0): (none)
-  Memory Dependent IPs (0): (none)
+  Read Registers: rsp
+  Write Registers: rdi
+  Register Dependent IPs: (none)
+  Read Addresses: (none)
+  Write Addresses: (none)
+  Memory Dependent IPs: (none)
 ```
 
 ## CSV File Format

@@ -70,12 +70,12 @@ class TraceVerifier:
             return False
     
     def check_branch_types(self):
-        """Verify branch types: direct unconditional, direct conditional, indirect."""
+        """Verify branch types: direct_unconditional, direct_conditional, indirect."""
         print("\n[2] Checking branch types...")
         
         expected_branches = {
-            'direct unconditional': ['JMP'],
-            'direct conditional': ['JNE', 'JE', 'JZ', 'JNZ', 'JA', 'JB', 'JBE', 'JAE'],
+            'direct_unconditional': ['JMP'],
+            'direct_conditional': ['JNE', 'JE', 'JZ', 'JNZ', 'JA', 'JB', 'JBE', 'JAE'],
             'indirect': ['JMP']  # Indirect JMP
         }
         
@@ -97,7 +97,7 @@ class TraceVerifier:
         
         # Check for expected branch types
         all_found = True
-        for branch_type in ['direct unconditional', 'direct conditional', 'indirect']:
+        for branch_type in ['direct_unconditional', 'direct_conditional', 'indirect']:
             count = self.stats[f'branch_{branch_type}']
             if count > 0:
                 print(f"  ✓ Found {count} {branch_type} branch(es)")
@@ -180,9 +180,70 @@ class TraceVerifier:
         
         return True
     
+    def check_register_normalization(self):
+        """Verify that only full registers are tracked (no partial registers like EAX, AX, AL)."""
+        print("\n[5] Checking register normalization (full registers only)...")
+        
+        # Define partial register patterns (case-insensitive matching)
+        # 32-bit partial registers (EAX, EBX, etc.) - these should be normalized to RAX, RBX, etc.
+        partial_32bit = ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'esp', 'ebp', 'eip', 'eflags']
+        # 16-bit partial registers (AX, BX, etc.) - these should be normalized to RAX, RBX, etc.
+        partial_16bit = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'sp', 'bp', 'ip']
+        # 8-bit partial registers (AL, AH, BL, etc.) - these should be normalized to RAX, RBX, etc.
+        partial_8bit = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'sil', 'dil', 'spl', 'bpl']
+        # 8-bit registers from R8-R15 (R8B, R9B, etc.) - these should be normalized to R8, R9, etc.
+        partial_8bit_extended = [f'r{i}b' for i in range(8, 16)]
+        
+        # Combine all partial register patterns
+        # Note: We use lowercase for matching since we convert to lowercase before checking
+        all_partial_regs = set(partial_32bit + partial_16bit + partial_8bit + partial_8bit_extended)
+        
+        # Track partial registers found
+        partial_regs_found = []
+        
+        for instr in self.instructions:
+            ip = instr.get('IP', '').strip()
+            read_regs = self.parse_semicolon_list(instr.get('Read Registers', ''))
+            write_regs = self.parse_semicolon_list(instr.get('Write Registers', ''))
+            
+            # Check read registers
+            for reg in read_regs:
+                reg_lower = reg.lower()
+                if reg_lower in all_partial_regs:
+                    partial_regs_found.append((ip, 'read', reg))
+            
+            # Check write registers
+            for reg in write_regs:
+                reg_lower = reg.lower()
+                if reg_lower in all_partial_regs:
+                    partial_regs_found.append((ip, 'write', reg))
+        
+        if partial_regs_found:
+            # Group by register name for better reporting
+            partial_by_reg = {}
+            for ip, rw_type, reg in partial_regs_found:
+                if reg not in partial_by_reg:
+                    partial_by_reg[reg] = []
+                partial_by_reg[reg].append((ip, rw_type))
+            
+            print(f"  ✗ Found {len(partial_regs_found)} partial register references:")
+            for reg, occurrences in sorted(partial_by_reg.items()):
+                count = len(occurrences)
+                example_ip, example_type = occurrences[0]
+                print(f"    - {reg} ({count} occurrence(s), e.g., {example_type} at IP {example_ip})")
+                # Add error for each unique register
+                self.errors.append(
+                    f"Partial register '{reg}' found in trace (should be normalized to full register, e.g., EAX→RAX, AX→RAX, AL→RAX)"
+                )
+            
+            return False
+        else:
+            print(f"  ✓ All registers are normalized to full registers (no partial registers found)")
+            return True
+    
     def check_register_dependencies(self):
         """Verify register dependencies are tracked."""
-        print("\n[5] Checking register dependencies...")
+        print("\n[6] Checking register dependencies...")
         
         # Registers that are special and may not always have dependencies tracked
         # RIP is implicitly updated by every instruction and used for PC-relative addressing
@@ -258,7 +319,7 @@ class TraceVerifier:
     
     def check_memory_operations(self):
         """Verify memory read/write tracking."""
-        print("\n[6] Checking memory read/write tracking...")
+        print("\n[7] Checking memory read/write tracking...")
         
         memory_reads = 0
         memory_writes = 0
@@ -288,7 +349,7 @@ class TraceVerifier:
     
     def check_memory_dependencies(self):
         """Verify memory dependencies are tracked."""
-        print("\n[7] Checking memory dependencies...")
+        print("\n[8] Checking memory dependencies...")
         
         # Track last write IP for memory addresses using the same algorithm as the tracing code
         # Format: list of (addr, size, writer_ip) tuples representing disjoint ranges
@@ -381,7 +442,7 @@ class TraceVerifier:
     
     def check_test_specific_patterns(self):
         """Check for specific patterns from the test assembly file."""
-        print("\n[8] Checking test-specific patterns...")
+        print("\n[9] Checking test-specific patterns...")
         
         # Look for patterns from test_trace_c.s
         patterns = {
@@ -434,6 +495,7 @@ class TraceVerifier:
             self.check_branch_types,
             self.check_sync_barriers,
             self.check_register_operations,
+            self.check_register_normalization,
             self.check_register_dependencies,
             self.check_memory_operations,
             self.check_memory_dependencies,

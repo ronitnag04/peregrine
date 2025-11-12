@@ -248,7 +248,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << "  Instruction Sync: " << (inst.inst_sync ? "true" : "false") << std::endl;
     
     // Read Registers
-    std::cout << "  Read Registers (" << inst.read_registers.size() << "): ";
+    std::cout << "  Read Registers: ";
     if (inst.read_registers.empty()) {
         std::cout << "(none)";
     } else {
@@ -260,7 +260,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << std::endl;
     
     // Write Registers
-    std::cout << "  Write Registers (" << inst.write_registers.size() << "): ";
+    std::cout << "  Write Registers: ";
     if (inst.write_registers.empty()) {
         std::cout << "(none)";
     } else {
@@ -272,7 +272,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << std::endl;
     
     // Register Dependent IPs
-    std::cout << "  Register Dependent IPs (" << inst.reg_dependent_ips.size() << "): ";
+    std::cout << "  Register Dependent IPs: ";
     if (inst.reg_dependent_ips.empty()) {
         std::cout << "(none)";
     } else {
@@ -284,7 +284,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << std::endl;
     
     // Read Addresses
-    std::cout << "  Read Addresses (" << inst.read_addresses.size() << "): ";
+    std::cout << "  Read Addresses: ";
     if (inst.read_addresses.empty()) {
         std::cout << "(none)";
     } else {
@@ -299,7 +299,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << std::endl;
     
     // Write Addresses
-    std::cout << "  Write Addresses (" << inst.write_addresses.size() << "): ";
+    std::cout << "  Write Addresses: ";
     if (inst.write_addresses.empty()) {
         std::cout << "(none)";
     } else {
@@ -314,7 +314,7 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << std::endl;
     
     // Memory Dependent IPs
-    std::cout << "  Memory Dependent IPs (" << inst.mem_dependent_ips.size() << "): ";
+    std::cout << "  Memory Dependent IPs: ";
     if (inst.mem_dependent_ips.empty()) {
         std::cout << "(none)";
     } else {
