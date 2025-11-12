@@ -70,6 +70,44 @@ The test file exercises the following tracing features:
 - **Test 12**: `rdtsc` (read timestamp counter, sync barrier)
 - **Test 16**: `rdtscp` (read timestamp counter with processor ID, sync barrier)
 
+### 9. Register Normalization
+
+#### 32-bit Partial Registers
+- **Test 17**: `mov $0x12345678, %eax` (write EAX, should normalize to RAX)
+- **Test 17**: `mov $0x9ABCDEF0, %ebx` (write EBX, should normalize to RBX)
+- **Test 17**: `mov %eax, %ecx` (read EAX, write ECX, should show reg dependency on previous EAX write)
+- **Test 17**: `mov %ebx, %edx` (read EBX, write EDX, should show reg dependency on previous EBX write)
+
+#### 16-bit Partial Registers
+- **Test 18**: `mov $0x1111, %ax` (write AX, should normalize to RAX)
+- **Test 18**: `mov $0x2222, %bx` (write BX, should normalize to RBX)
+- **Test 18**: `mov %ax, %cx` (read AX, write CX, should show reg dependency on previous AX write)
+- **Test 18**: `mov %bx, %dx` (read BX, write DX, should show reg dependency on previous BX write)
+
+#### 8-bit Partial Registers
+- **Test 19**: `mov $0xAA, %al` (write AL, should normalize to RAX)
+- **Test 19**: `mov $0xBB, %ah` (write AH, should normalize to RAX)
+- **Test 19**: `mov $0xCC, %bl` (write BL, should normalize to RBX)
+- **Test 19**: `mov $0xDD, %bh` (write BH, should normalize to RBX)
+- **Test 19**: `mov %al, %cl` (read AL, write CL, should show reg dependency on previous AL write)
+- **Test 19**: `mov %ah, %ch` (read AH, write CH, should show reg dependency on previous AH write)
+
+#### Mixed Partial and Full Registers
+- **Test 20**: `mov $0xDEADBEEF, %eax` then `mov %rax, %rbx` (EAX write, then RAX read - should show dependency)
+- **Test 20**: `mov $0xCAFEBABE, %rax` then `mov %eax, %ecx` (RAX write, then EAX read - should show dependency)
+
+#### Extended 32-bit Registers
+- **Test 21**: `mov $0x11111111, %esi` (write ESI, should normalize to RSI)
+- **Test 21**: `mov $0x22222222, %edi` (write EDI, should normalize to RDI)
+- **Test 21**: `mov %esi, %r8d` (read ESI, write R8D, should show reg dependency, zero-extends to R8)
+- **Test 21**: `mov %edi, %r9d` (read EDI, write R9D, should show reg dependency, zero-extends to R9)
+
+#### Extended 16-bit Registers
+- **Test 22**: `mov $0x3333, %si` (write SI, should normalize to RSI)
+- **Test 22**: `mov $0x4444, %di` (write DI, should normalize to RDI)
+- **Test 22**: `mov %si, %r10w` (read SI, write R10W, should show reg dependency, zero-extends to R10)
+- **Test 22**: `mov %di, %r11w` (read DI, write R11W, should show reg dependency, zero-extends to R11)
+
 ## Building and Running
 
 ```bash
@@ -117,13 +155,14 @@ make -f Makefile.test verify
 The verification script checks:
 
 1. **IP Tracking**: All instructions have IP addresses
-2. **Branch Types**: "direct_unconditional", "direct_conditional", "indirect"
+2. **Branch Types**: Direct_unconditional, direct_conditional, and indirect branches
 3. **Sync Barriers**: MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP are marked as sync
 4. **Register Operations**: Register reads and writes are tracked
 5. **Register Dependencies**: Instructions show dependencies on previous instructions that wrote the registers they read
-6. **Memory Operations**: Memory reads and writes are tracked with addresses
-7. **Memory Dependencies**: Instructions show dependencies on previous instructions that wrote to memory addresses they read
-8. **Test Patterns**: Specific patterns from the test assembly file are detected
+6. **Register Normalization**: Partial registers (EAX, AX, AL, AH, ESI, SI, etc.) are normalized to full registers (RAX, RSI, etc.) for accurate dependency tracking
+7. **Memory Operations**: Memory reads and writes are tracked with addresses
+8. **Memory Dependencies**: Instructions show dependencies on previous instructions that wrote to memory addresses they read
+9. **Test Patterns**: Specific patterns from the test assembly file are detected
 
 The script will report:
 - ✓ **Success**: Feature is working correctly
@@ -140,6 +179,11 @@ The script will report:
 - [ ] Register reads tracked (rax, rbx, rcx, etc.)
 - [ ] Register writes tracked (rax, rbx, rcx, etc.)
 - [ ] Register dependencies tracked (instruction reading RAX shows dependency on instruction that wrote RAX)
+- [ ] Register normalization: 32-bit partial registers (EAX, EBX) normalize to full registers (RAX, RBX)
+- [ ] Register normalization: 16-bit partial registers (AX, BX) normalize to full registers (RAX, RBX)
+- [ ] Register normalization: 8-bit partial registers (AL, AH, BL, BH) normalize to full registers (RAX, RBX)
+- [ ] Register normalization: Mixed partial and full registers show correct dependencies (EAX write → RAX read, RAX write → EAX read)
+- [ ] Register normalization: Extended registers (ESI, EDI, SI, DI) normalize correctly (ESI→RSI, EDI→RDI, SI→RSI, DI→RDI)
 - [ ] Memory reads tracked (test_var, test_array addresses)
 - [ ] Memory writes tracked (test_var, test_array addresses)
 - [ ] Memory dependencies tracked (instruction reading from test_array[0] shows dependency on instruction that wrote to test_array[0])
