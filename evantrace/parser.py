@@ -4,7 +4,10 @@ trace into a list of instruction objects.
 """
 import csv
 import numpy as np
-from evantrace.instructions import Instruction, Opcode, Register, Branch_Type
+from evantrace.x86.opcodes import Opcode
+from evantrace.x86.registers import Register
+from evantrace.x86.branch_types import Branch_Type
+from evantrace.x86.instructions import Instruction
 
 class Parser:
     """

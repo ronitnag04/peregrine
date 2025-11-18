@@ -114,7 +114,7 @@ class Cache:
             # write latency of the parent for the evicted line plus the read latency
             # of the parent for the requested line
             # (or plus main memory latency if parent is None)
-            victim_line = (self.tags[index][set_idx] << (self.index_bits + self.offset_bits)) + (index << self.offset_bits)
+            victim_line = (self.tags[index][set_idx] << np.uint64(self.index_bits + self.offset_bits)) + (index << np.uint64(self.offset_bits))
             if self.parent is None:
                 latency = self.read_latency + MAIN_MEMORY_LATENCY
             else:
@@ -159,7 +159,7 @@ class Cache:
         else:
             # On a miss with an eviction of a dirty line, we return the cache's own
             # write latency plus the write latency of the parent for the evicted line
-            victim_line = (self.tags[index][set_idx] << (self.index_bits + self.offset_bits)) + (index << self.offset_bits)
+            victim_line = (self.tags[index][set_idx] << np.uint64(self.index_bits + self.offset_bits)) + (index << np.uint64(self.offset_bits))
             if self.parent is None:
                 latency = self.write_latency
             else:

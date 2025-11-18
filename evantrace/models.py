@@ -1,4 +1,4 @@
-from .instructions import Instruction
+from evantrace.x86.instructions import Instruction
 
 def is_load(instruction: Instruction):
     # TODO
