@@ -27,7 +27,7 @@ struct instr_trace_t {
   std::vector<mem_access_t> read_addresses;
   std::vector<mem_access_t> write_addresses;
   std::vector<unsigned long> mem_dependent_ips;
-  latency_t latency;
+  latency_t exe_latency;
   latency_t mem_latency;
 };
 
@@ -42,7 +42,8 @@ enum class branch_t : uint8_t { DIRECT_COND, DIRECT_UNCOND, INDIRECT };
 struct Instr {
   uint64_t IP;
   instr_id_t id;
-  uint32_t latency;
+  latency_t exe_latency;
+  latency_t mem_latency;
 
   bool is_alu;
   bool is_fp;
@@ -53,7 +54,6 @@ struct Instr {
 
   branch_t branch_type;
   std::vector<uint32_t> deps;
-  uint64_t icache_line;
 };
 
 }  // namespace analytical
