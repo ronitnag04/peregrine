@@ -70,158 +70,66 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
   std::vector<tracing::instr_trace_t> instructions;
 
   try {
-    // First, try parsing with 15 columns (with mem + fetch + exec latency)
-    try {
-      io::CSVReader<15, io::trim_chars<' ', '\t'>,
-                    io::double_quote_escape<',', '"'>>
-          in(csv_path);
+    io::CSVReader<16, io::trim_chars<' ', '\t'>,
+                  io::double_quote_escape<',', '"'>>
+        in(csv_path);
 
-      in.read_header(io::ignore_extra_column, "IP", "Assembly", "Category",
-                     "Opcode", "Branch Type", "Instruction Sync",
-                     "Read Registers", "Write Registers",
-                     "Register Dependent IPs", "Read Addresses",
-                     "Write Addresses", "Memory Dependent IPs", "Mem Latency",
-                     "Fetch Latency", "Execution Latency");
+    in.read_header(io::ignore_extra_column, "IP", "Assembly", "Category",
+                    "Opcode", "Branch Type", "Branch Taken", "Branch Target Address",
+                    "Instruction Sync", "Read Registers", "Write Registers",
+                    "Register Dependent IPs", "Read Addresses",
+                    "Write Addresses", "Memory Dependent IPs",
+                    "Fetch Latency", "Execution Latency");
 
-      std::string ip_str, assembly, category, opcode, branch_type;
-      std::string inst_sync_str;
-      std::string read_regs_str, write_regs_str, reg_deps_str;
-      std::string read_addrs_str, write_addrs_str, mem_deps_str;
-      std::string mem_latency_str, fetch_latency_str, exec_latency_str;
+    std::string ip_str, assembly, category, opcode;
+    std::string branch_type, branch_taken, branch_target_addr;
+    std::string inst_sync_str;
+    std::string read_regs_str, write_regs_str, reg_deps_str;
+    std::string read_addrs_str, write_addrs_str, mem_deps_str;
+    std::string fetch_latency_str, exec_latency_str;
 
-      while (in.read_row(ip_str, assembly, category, opcode, branch_type,
-                         inst_sync_str, read_regs_str, write_regs_str,
-                         reg_deps_str, read_addrs_str, write_addrs_str,
-                         mem_deps_str, mem_latency_str, fetch_latency_str,
-                         exec_latency_str)) {
-        tracing::instr_trace_t inst;
+    uint64_t row = 2;
 
-        inst.ip = parse_hex(ip_str);
-        inst.assembly = assembly;
-        inst.category = category;
-        inst.opcode = opcode;
-        inst.branch_type = branch_type;
-        inst.inst_sync = (inst_sync_str == "true" || inst_sync_str == "True");
+    while (
+      in.read_row(
+        ip_str, assembly, category, opcode,
+        branch_type, branch_taken, branch_target_addr
+        inst_sync_str, read_regs_str, write_regs_str,
+        reg_deps_str, read_addrs_str, write_addrs_str,
+        mem_deps_str, fetch_latency_str, exec_latency_str
+      )
+    ) {
+      tracing::instr_trace_t inst;
 
-        inst.read_registers = split_semicolon(read_regs_str);
-        inst.write_registers = split_semicolon(write_regs_str);
-        inst.reg_dependent_ips = parse_ip_list(reg_deps_str);
-        inst.read_addresses = parse_mem_access_list(read_addrs_str);
-        inst.write_addresses = parse_mem_access_list(write_addrs_str);
-        inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
+      inst.ip = parse_hex(ip_str);
+      inst.assembly = assembly;
+      inst.category = category;
+      inst.opcode = opcode;
+      inst.branch_type = branch_type;
+      inst.branch_taken = (branch_taken == "true" || branch_taken == "True");
+      inst.branch_target_addr = parse_hex(branch_target_addr);
+      inst.inst_sync = (inst_sync_str == "true" || inst_sync_str == "True");
 
-        // Parse latencies from CSV (mem latency is explicit here)
-        inst.mem_latency =
-            mem_latency_str.empty() ? 0 : std::stoul(mem_latency_str);
-        inst.mem_latency =
-            inst.mem_latency;  // keep explicit assignment for clarity
-        inst.mem_latency = inst.mem_latency;  // no-op to avoid unused warning
+      inst.read_registers = split_semicolon(read_regs_str);
+      inst.write_registers = split_semicolon(write_regs_str);
+      inst.reg_dependent_ips = parse_ip_list(reg_deps_str);
+      inst.read_addresses = parse_mem_access_list(read_addrs_str);
+      inst.write_addresses = parse_mem_access_list(write_addrs_str);
+      inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
 
-        inst.mem_latency = inst.mem_latency;  // ... (keeps intent explicit)
-        
-        inst.mem_latency =
-            mem_latency_str.empty() ? 0 : std::stoul(mem_latency_str);
-        inst.exe_latency =
-            exec_latency_str.empty() ? 1 : std::stoul(exec_latency_str);
-        // fetch_latency_str is still available if needed elsewhere
-
-        instructions.push_back(inst);
+      if (fetch_latency_str.empty()) {
+        throw std::runtime_error(std::format("Missing fetch latency at row: {}", row));
       }
-    } catch (const io::error::base&) {
-      // If 15-column parsing fails, try 14 columns (with fetch+exec lat).
-      instructions.clear();
+      
+      inst.fetch_latency = std::stoul(fetch_latency_str);
 
-      try {
-        io::CSVReader<14, io::trim_chars<' ', '\t'>,
-                      io::double_quote_escape<',', '"'>>
-            in(csv_path);
-
-        in.read_header(io::ignore_extra_column, "IP", "Assembly", "Category",
-                       "Opcode", "Branch Type", "Instruction Sync",
-                       "Read Registers", "Write Registers",
-                       "Register Dependent IPs", "Read Addresses",
-                       "Write Addresses", "Memory Dependent IPs",
-                       "Fetch Latency", "Execution Latency");
-
-        std::string ip_str, assembly, category, opcode, branch_type;
-        std::string inst_sync_str;
-        std::string read_regs_str, write_regs_str, reg_deps_str;
-        std::string read_addrs_str, write_addrs_str, mem_deps_str;
-        std::string fetch_latency_str, exec_latency_str;
-
-        while (in.read_row(ip_str, assembly, category, opcode, branch_type,
-                           inst_sync_str, read_regs_str, write_regs_str,
-                           reg_deps_str, read_addrs_str, write_addrs_str,
-                           mem_deps_str, fetch_latency_str, exec_latency_str)) {
-          tracing::instr_trace_t inst;
-
-          inst.ip = parse_hex(ip_str);
-          inst.assembly = assembly;
-          inst.category = category;
-          inst.opcode = opcode;
-          inst.branch_type = branch_type;
-          inst.inst_sync = (inst_sync_str == "true" || inst_sync_str == "True");
-
-          inst.read_registers = split_semicolon(read_regs_str);
-          inst.write_registers = split_semicolon(write_regs_str);
-          inst.reg_dependent_ips = parse_ip_list(reg_deps_str);
-          inst.read_addresses = parse_mem_access_list(read_addrs_str);
-          inst.write_addresses = parse_mem_access_list(write_addrs_str);
-          inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
-
-          // No explicit mem_latency column -> use fetch latency as mem_latency
-          inst.mem_latency =
-              fetch_latency_str.empty() ? 0 : std::stoul(fetch_latency_str);
-          inst.exe_latency =
-              exec_latency_str.empty() ? 1 : std::stoul(exec_latency_str);
-          instructions.push_back(inst);
-        }
-      } catch (const io::error::base&) {
-        // If 14-column parsing fails, try 12 columns (without latency data)
-        instructions.clear();
-
-        io::CSVReader<12, io::trim_chars<' ', '\t'>,
-                      io::double_quote_escape<',', '"'>>
-            in(csv_path);
-
-        in.read_header(io::ignore_extra_column, "IP", "Assembly", "Category",
-                       "Opcode", "Branch Type", "Instruction Sync",
-                       "Read Registers", "Write Registers",
-                       "Register Dependent IPs", "Read Addresses",
-                       "Write Addresses", "Memory Dependent IPs");
-
-        std::string ip_str, assembly, category, opcode, branch_type;
-        std::string inst_sync_str;
-        std::string read_regs_str, write_regs_str, reg_deps_str;
-        std::string read_addrs_str, write_addrs_str, mem_deps_str;
-
-        while (in.read_row(ip_str, assembly, category, opcode, branch_type,
-                           inst_sync_str, read_regs_str, write_regs_str,
-                           reg_deps_str, read_addrs_str, write_addrs_str,
-                           mem_deps_str)) {
-          tracing::instr_trace_t inst;
-
-          inst.ip = parse_hex(ip_str);
-          inst.assembly = assembly;
-          inst.category = category;
-          inst.opcode = opcode;
-          inst.branch_type = branch_type;
-          inst.inst_sync = (inst_sync_str == "true" || inst_sync_str == "True");
-
-          inst.read_registers = split_semicolon(read_regs_str);
-          inst.write_registers = split_semicolon(write_regs_str);
-          inst.reg_dependent_ips = parse_ip_list(reg_deps_str);
-          inst.read_addresses = parse_mem_access_list(read_addrs_str);
-          inst.write_addresses = parse_mem_access_list(write_addrs_str);
-          inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
-
-          // Initialize latencies to default values
-          inst.exe_latency = 1;
-          inst.mem_latency = 0;
-
-          instructions.push_back(inst);
-        }
+      if (exec_latency_str.empty()) {
+        throw std::runtime_error(std::format("Missing execution latency at row {}", row));
       }
+      
+      inst.exe_latency = std::stoul(exec_latency_str);
+
+      instructions.push_back(inst);
     }
   } catch (const io::error::base& e) {
     throw std::runtime_error(std::string("CSV parsing error: ") + e.what());

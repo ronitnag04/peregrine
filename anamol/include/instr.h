@@ -20,6 +20,8 @@ struct instr_trace_t {
   std::string category;
   std::string opcode;
   std::string branch_type;
+  bool branch_taken;
+  unsigned long branch_target_addr;
   bool inst_sync;
   std::vector<std::string> read_registers;
   std::vector<std::string> write_registers;
@@ -28,7 +30,7 @@ struct instr_trace_t {
   std::vector<mem_access_t> write_addresses;
   std::vector<unsigned long> mem_dependent_ips;
   latency_t exe_latency;
-  latency_t mem_latency;
+  latency_t fetch_latency;
 };
 
 }  // namespace tracing
