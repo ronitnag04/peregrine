@@ -16,6 +16,8 @@ class Instruction:
         opcode: Opcode,
         inst_ptr: np.uint64,
         branch_type: Branch_Type | None,
+        branch_taken: bool,
+        branch_target_addr: np.uint64,
         inst_sync: bool,
         read_regs: list[Register],
         write_regs: list[Register],
@@ -29,6 +31,8 @@ class Instruction:
         self.opcode: Opcode = opcode
         self.inst_ptr: np.uint64 = inst_ptr
         self.branch_type: Branch_Type | None = branch_type
+        self.branch_taken: bool = branch_taken
+        self.branch_target_addr: np.uint64 = branch_target_addr
         self.inst_sync: bool = inst_sync
         self.read_regs: list[Register] = read_regs
         self.write_regs: list[Register] = write_regs

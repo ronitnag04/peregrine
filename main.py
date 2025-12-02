@@ -6,6 +6,7 @@ from evantrace.parser import Parser
 from evantrace.writer import Writer
 from evantrace.caches import Cache
 from evantrace.sim import Sim
+from evantrace.branch_predictor import SimpleBranchPredictor, TAGEBranchPredictor
 
 def main():
     print("Hello from evantrace! Beginning simulation...")
@@ -30,12 +31,16 @@ def main():
         associativity=4,
         parent=l2cache
     )
+
+    branch_predictor = TAGEBranchPredictor()
     
-    sim = Sim(trace=instructions, icache=icache, dcache=dcache, l2cache=l2cache)
+    sim = Sim(trace=instructions, icache=icache, dcache=dcache, l2cache=l2cache, branch_predictor=branch_predictor)
     sim.run()
     
     writer = Writer(sys.argv[2])
     writer.write(instructions)
+
+    print(f"Misprediction rate: {branch_predictor.get_misprediction_rate()}")
 
 if __name__ == "__main__":
     main()
