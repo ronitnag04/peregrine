@@ -2,6 +2,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <cstdio>
 
 #include "csv.h"
 #include "parser.h"
@@ -117,7 +118,7 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
         inst.mem_latency = inst.mem_latency;  // no-op to avoid unused warning
 
         inst.mem_latency = inst.mem_latency;  // ... (keeps intent explicit)
-
+        
         inst.mem_latency =
             mem_latency_str.empty() ? 0 : std::stoul(mem_latency_str);
         inst.exe_latency =
@@ -173,7 +174,6 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
               fetch_latency_str.empty() ? 0 : std::stoul(fetch_latency_str);
           inst.exe_latency =
               exec_latency_str.empty() ? 1 : std::stoul(exec_latency_str);
-
           instructions.push_back(inst);
         }
       } catch (const io::error::base&) {
@@ -236,6 +236,7 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
   result.IP = inst.ip;
   result.id = id;
   result.exe_latency = inst.exe_latency;
+  result.mem_latency = inst.mem_latency;
 
   // Determine instruction type
   result.is_alu = (inst.category == "BINARY" || inst.category == "LOGICAL" ||
