@@ -5,6 +5,21 @@ import numpy as np
 import os
 import sys
 from pathlib import Path
+import argparse
+
+# Parse CLI args (use parse_known_args so Dash/other libs don't break this)
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument(
+    "--output-dir",
+    "-o",
+    type=str,
+    default=None,
+    help="Directory to look for output files",
+)
+parser.add_argument("--debug", action="store_true", help="Run Dash in debug mode")
+_args, _ = parser.parse_known_args()
+CLI_OUTPUT_DIR = Path(_args.output_dir).resolve() if _args.output_dir else None
+CLI_DEBUG = bool(_args.debug)
 
 # --- Data Loading / Mocking Layer ---
 
@@ -15,9 +30,20 @@ try:
     # 1. Load data exactly as in your script
     script_dir = Path(__file__).resolve().parent
     default_output = (script_dir.parent / "output").resolve()
-    output_dir = Path(os.environ.get("ANAMOL_OUTPUT_DIR", str(default_output)))
+    # prefer CLI arg, then env var, then default path
+    if CLI_OUTPUT_DIR:
+        output_dir = CLI_OUTPUT_DIR
+    else:
+        output_dir = Path(
+            os.environ.get("ANAMOL_OUTPUT_DIR", str(default_output))
+        ).resolve()
+
+    # Directory specifically for stored throughput vectors (subdir inside output)
+    # Adjust name if your pipeline uses a different folder (e.g. "throughputs" or "throughput_vectors")
+    THROUGHPUT_VEC_DIR = (output_dir / "throughputs").resolve()
 
     print(f"Attempting to load data from: {output_dir}")
+    print(f"Throughput vectors dir: {THROUGHPUT_VEC_DIR}")
     data = utils.load_all_throughputs(output_dir=str(output_dir))
 
     if not data:
@@ -559,4 +585,4 @@ def update_graph(view, selected_resources, param_indices, param_ids):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=CLI_DEBUG)

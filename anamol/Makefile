@@ -21,10 +21,10 @@ PARAM_STEP ?= BASE_2
 TRACE_CSV ?= $(TRACE_DIR)/trace.csv
 
 # ---- Common sources ----
-SRCS_MODELS := $(SRC_DIR)/models.cpp $(SRC_DIR)/ext.cpp
+SRCS_MODELS := $(SRC_DIR)/models.cpp
 
 # Serial-only models (no OpenMP), used for benchmark no-OMP binary
-SRCS_MODELS_SERIAL := $(SRC_DIR)/models.cpp $(SRC_DIR)/ext.cpp
+SRCS_MODELS_SERIAL := $(SRC_DIR)/models.cpp
 OBJS_MODELS_SERIAL := $(patsubst $(SRC_DIR)/%.cpp,$(OBJDIR)/serial_%.o,$(SRCS_MODELS_SERIAL))
 
 # RapidCSV-based parsing
@@ -100,7 +100,7 @@ $(BUILD)/test_models_omp: $(OBJS_TEST_MODELS)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) $^ -o $@
 
 # Non-OpenMP version (serial, for benchmark)
-$(BUILD)/test_models_noomp: $(filter-out $(OBJDIR)/models.o $(OBJDIR)/ext.o,$(OBJS_TEST_MODELS)) $(OBJS_MODELS_SERIAL)
+$(BUILD)/test_models_noomp: $(filter-out $(OBJDIR)/models.o,$(OBJS_TEST_MODELS)) $(OBJS_MODELS_SERIAL)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $^ -o $@
 
 # Keep backward compatibility
@@ -108,12 +108,22 @@ $(BUILD)/test_models: $(BUILD)/test_models_omp
 	cp $< $@
 
 # ---- Run targets ----
+
+# Python interpreter
+PYTHON := python3
+# Output directory to pass to the visualizer (defaults to 'output')
+THR_DIR ?= output
+
 main.run: $(BUILD)/main
-	$< $(TRACE_CSV)
+	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE)
 
 # Convenience run target for anamol
-anamol.run: $(BUILD)/main
-	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE)
+anamol.run: main.run visualize.run
+	@true
+
+# Visualizer run target (passes --output-dir)
+visualize.run:
+	$(PYTHON) python/visualize.py --output-dir $(THR_DIR)
 
 parser.run: $(BUILD)/parser
 	$< $(TRACE_CSV)
