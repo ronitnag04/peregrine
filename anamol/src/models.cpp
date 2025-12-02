@@ -309,7 +309,7 @@ double get_thr_icache_fills(const vector<Instr>& window,
 
   for (const auto& instr : window) {
     uint64_t cache_line_addr = instr.IP / cache_line_size;
-    uint64_t fetch_latency = instr.fetch_latency;
+    uint64_t fetch_latency = instr.mem_latency;
 
     auto it = in_flight_requests.find(cache_line_addr);
 
@@ -325,7 +325,7 @@ double get_thr_icache_fills(const vector<Instr>& window,
       // cache line is not already in flight, so a fill request is required
       uint64_t next_request_slot_cycle = prev_inst_ready_cycle;
       while (in_flight_requests.size() >= max_icache_fills) {
-        uint64_t earliest_finish_time = std::numeric_limits<uint64_t>::max();
+        uint64_t earliest_finish_time = 1000000000ULL;
         uint64_t earliest_addr = 0;
 
         for (const auto& pair : in_flight_requests) {
