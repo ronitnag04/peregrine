@@ -83,13 +83,14 @@ class Instruction:
         """Returns a neat, human-readable string representation."""
         return (
             f"Instruction @ {hex(self.inst_ptr)}\n"
-            f"  Assembly:   {self.assembly}\n"
-            f"  Category:   {self.category}\n"
-            f"  Opcode:     {self.opcode.name if self.opcode else 'None'}\n"
-            f"  Reads:      {[r.name for r in self.read_regs]}\n"
-            f"  Writes:     {[r.name for r in self.write_regs]}\n"
-            f"  Mem Reads:  {[hex(a) for a in self.read_addrs]}\n"
-            f"  Mem Writes: {[hex(a) for a in self.write_addrs]}\n"
-            f"  Latency:    {self.latency}"
+            f"  Assembly:       {self.assembly}\n"
+            f"  Category:       {self.category}\n"
+            f"  Opcode:         {self.opcode.name if self.opcode else 'None'}\n"
+            f"  Reads:          {[r.name for r in self.read_regs]}\n"
+            f"  Writes:         {[r.name for r in self.write_regs]}\n"
+            f"  Mem Reads:      {[hex(a) for a in self.read_addrs]}\n"
+            f"  Mem Writes:     {[hex(a) for a in self.write_addrs]}\n"
+            f"  Fetch Latency:  {self.fetch_latency}\n"
+            f"  Exec Latency:   {self.exec_latency}\n"
         )
     

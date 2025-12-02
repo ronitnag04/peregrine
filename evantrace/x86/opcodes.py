@@ -138,7 +138,7 @@ class Opcode(Enum):
     STOS    = { 'reg_reg': 3, 'reg_mem': 3 }
     STOSQ   = { 'reg_reg': 3, 'reg_mem': 3 }
     MOVS    = { 'reg_reg': 5 } 
-    SCAS    = { 'reg_reg': 3 } 
+    SCAS    = { 'reg_reg': 3, 'reg_mem': 3} 
     CMPS    = { 'reg_reg': 5 } 
 
     # --- Atomic/Sync ---
@@ -197,7 +197,7 @@ class Opcode(Enum):
     PUNPCKHBW  = { 'reg_reg': 1 } 
     PUNPCKLBW  = { 'reg_reg': 1 }
     PUNPCKLWD  = { 'reg_reg': 1 } 
-    PUNPCKLDQ = { 'reg_reg': 1 }
+    PUNPCKLDQ  = { 'reg_reg': 1 }
     PUNPCKLQDQ = { 'reg_reg': 1 }
     # Note: Other PUNPCK variants generally share latency 1
 
@@ -208,11 +208,11 @@ class Opcode(Enum):
     PSHUFLW   = { 'reg_reg': 1 } 
     PSHUFHW   = { 'reg_reg': 1 } 
     PALIGNR   = { 'reg_reg': 1 } 
-    VALIGND   = { 'reg_reg': 3 } 
-    VALIGNQ   = { 'reg_reg': 3 } 
-    VPERMD    = { 'reg_reg': 3 } 
-    VPERMQ    = { 'reg_reg': 3 } 
-    VPERM2I128= { 'reg_reg': 3 } 
+    VALIGND   = { 'reg_reg': 3, 'mem_reg': 3 } 
+    VALIGNQ   = { 'reg_reg': 3, 'mem_reg': 3 }  
+    VPERMD    = { 'reg_reg': 3, 'mem_reg': 3 } 
+    VPERMQ    = { 'reg_reg': 3, 'mem_reg': 3 } 
+    VPERM2I128= { 'reg_reg': 3, 'mem_reg': 3 } 
 
     # --- Insert / Extract ---
     PEXTRB    = { 'reg_reg': 3, 'reg_mem': 3 } 
@@ -280,8 +280,8 @@ class Opcode(Enum):
     PCMPGTB   = { 'reg_reg': 1, 'mem_reg': 5 } 
     PCMPGTW   = { 'reg_reg': 1, 'mem_reg': 5 } 
     PCMPGTD   = { 'reg_reg': 1, 'mem_reg': 5 } 
-    PCMPGTQ   = { 'reg_reg': 3 } 
-    VPCMPEQB  = { 'reg_reg': 3 }
+    PCMPGTQ   = { 'reg_reg': 3, 'mem_reg': 3 }  
+    VPCMPEQB  = { 'reg_reg': 3, 'mem_reg': 3 } 
 
     # --- Vector Logical ---
     PAND      = { 'reg_reg': 1, 'mem_reg': 5 } 

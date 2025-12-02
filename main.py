@@ -8,7 +8,7 @@ from evantrace.caches import Cache
 from evantrace.sim import Sim
 
 def main():
-    print("Hello from evantrace! Beginning Parser test...")
+    print("Hello from evantrace! Beginning simulation...")
     if len(sys.argv) < 2:
         print("Need an input and an output file.")
         
