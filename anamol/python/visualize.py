@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, ALL, ctx
+from dash import dcc, html, Input, Output, State, ALL, MATCH, ctx
 import plotly.graph_objects as go
 import numpy as np
 import os
@@ -82,6 +82,37 @@ def _find_best_index_for_params(params: np.ndarray, sel_vals):
     return int(np.argmin(d2))
 
 
+# --- CDF helper (use utils if available, otherwise local fallback) ---
+# Prefer the canonical implementation from utils when present, otherwise provide a small fallback.
+try:
+    import utils  # already imported elsewhere in file; this is safe
+
+    compute_cdf_features_safe = utils.compute_cdf_features
+except Exception:
+
+    def compute_cdf_features_safe(samples: np.ndarray, num_points: int = 50):
+        samples = np.asarray(samples).reshape(-1)
+        if samples.size == 0:
+            return np.array([]), np.array([]), 0.0
+        ps = np.linspace(1, 99, num_points)
+        cdf_raw = np.percentile(samples, ps)
+        w = np.clip(samples, 0, None)
+        if w.sum() == 0:
+            cdf_weighted = cdf_raw.copy()
+        else:
+            w = w / w.sum()
+            target_count = 10_000
+            counts = np.round(w * target_count).astype(int)
+            mask = counts > 0
+            if mask.sum() == 0:
+                cdf_weighted = cdf_raw.copy()
+            else:
+                expanded = np.repeat(samples[mask], counts[mask])
+                cdf_weighted = np.percentile(expanded, ps)
+        mean_val = float(np.mean(samples))
+        return cdf_raw, cdf_weighted, mean_val
+
+
 # --- Dash Application Layout ---
 
 app = dash.Dash(
@@ -123,26 +154,41 @@ app.layout = html.Div(
                             placeholder="Select resources...",
                             style={"marginBottom": "20px"},
                         ),
-                        # Dynamic controls container
-                        html.Div(id="controls-container"),
+                        # Dynamic controls container - Scrollable sidebar
+                        html.Div(
+                            id="controls-container",
+                            style={
+                                "maxHeight": "75vh",
+                                "overflowY": "auto",
+                                "paddingRight": "10px",
+                            },
+                        ),
                     ],
                     className="four columns",
-                    style={"maxHeight": "80vh", "overflowY": "auto"},
-                ),
-                # Right Column: Graph
+                ),  # 4/12 columns width
+                # Right Column: Graph + View Tabs
                 html.Div(
                     [
+                        dcc.Tabs(
+                            id="view-tabs",
+                            value="throughput",
+                            children=[
+                                dcc.Tab(label="Throughput", value="throughput"),
+                                dcc.Tab(label="CDFs", value="cdfs"),
+                            ],
+                            style={"marginBottom": "10px"},
+                        ),
                         dcc.Graph(
                             id="throughput-graph",
                             style={"height": "75vh"},
                             config={"displayModeBar": True},
-                        )
+                        ),
                     ],
                     className="eight columns",
-                ),
+                ),  # 8/12 columns width
             ],
             className="row",
-            style={"margin": "20px"},
+            style={"maxWidth": "100%", "margin": "20px"},
         ),
     ]
 )
@@ -202,7 +248,6 @@ def update_controls(selected_resources):
             # This ensures even spacing regardless of whether values are [1,2,3] or [1, 2, 4, 8, 16...]
 
             # Create readable marks
-            # If too many values, sparse the labels to avoid text overlap
             count = len(unique_vals)
             step_size = 1
             if count > 10:
@@ -213,17 +258,22 @@ def update_controls(selected_resources):
                 if i % step_size == 0 or i == count - 1:
                     marks[i] = str(val)
 
-            # Store the *Mapping* in a custom data attribute or just rely on index reconstruction in the graph callback.
-            # We will rely on reconstruction.
-
             control_id = {
                 "type": "param-control",
                 "resource": res_key,
                 "index": col_idx,
             }
 
+            # Label ID for dynamic updates
+            label_id = {"type": "param-label", "resource": res_key, "index": col_idx}
+
+            # Initialize label with current value (index 0)
+            initial_val = unique_vals[0]
+            label_text = f"{name}: {initial_val}"
+
             label = html.Label(
-                f"{name}:",
+                label_text,
+                id=label_id,
                 style={"fontWeight": "bold", "fontSize": "0.9em", "marginTop": "10px"},
             )
 
@@ -234,9 +284,8 @@ def update_controls(selected_resources):
                 step=1,
                 value=0,  # Default to first index
                 marks=marks,
-                # Store the actual values in the component so we can read them client-side if needed,
-                # but mostly useful for the user to see the tooltip.
-                tooltip={"placement": "bottom", "always_visible": False},
+                # Disabled default tooltip so it doesn't show the index "0, 1, 2"
+                tooltip=None,
             )
 
             card_content.append(html.Div([label, slider]))
@@ -257,25 +306,86 @@ def update_controls(selected_resources):
 
 
 @app.callback(
+    Output({"type": "param-label", "resource": MATCH, "index": MATCH}, "children"),
+    [
+        Input(
+            {"type": "param-control", "resource": MATCH, "index": MATCH}, "drag_value"
+        ),
+        Input({"type": "param-control", "resource": MATCH, "index": MATCH}, "value"),
+    ],
+    State({"type": "param-control", "resource": MATCH, "index": MATCH}, "id"),
+)
+def update_dynamic_label(drag_val, set_val, slider_id):
+    """
+    Updates the label text in real-time while dragging.
+    Uses drag_value for immediate feedback without triggering heavy graph updates.
+    """
+    ctx_triggered = ctx.triggered_id
+
+    # Determine which value to use (drag takes precedence if active)
+    idx = set_val  # Default
+    if (
+        ctx.triggered
+        and "drag_value" in ctx.triggered[0]["prop_id"]
+        and drag_val is not None
+    ):
+        idx = drag_val
+    elif set_val is not None:
+        idx = set_val
+
+    # Recover Data
+    res_key = slider_id["resource"]
+    col_idx = slider_id["index"]
+
+    if res_key not in data:
+        return "Unknown"
+
+    params, _ = data[res_key]
+    params = np.atleast_2d(params)
+
+    # Get param name
+    param_names = get_param_names(res_key)
+    if not param_names or len(param_names) != params.shape[1]:
+        param_name = f"Param {col_idx}"
+    else:
+        param_name = param_names[col_idx]
+
+    # Get real value from index
+    col_vals = params[:, col_idx].astype(int)
+    unique_vals = sorted(list(np.unique(col_vals)))
+
+    # Safety clamp
+    if idx >= len(unique_vals):
+        idx = len(unique_vals) - 1
+    if idx < 0:
+        idx = 0
+
+    real_val = unique_vals[int(idx)]
+
+    return f"{param_name}: {real_val}"
+
+
+@app.callback(
     Output("throughput-graph", "figure"),
     [
+        Input("view-tabs", "value"),
         Input("resource-dropdown", "value"),
         Input({"type": "param-control", "resource": ALL, "index": ALL}, "value"),
     ],
     [State({"type": "param-control", "resource": ALL, "index": ALL}, "id")],
 )
-def update_graph(selected_resources, param_indices, param_ids):
+def update_graph(view, selected_resources, param_indices, param_ids):
     """
-    Reconstructs the parameters from the slider indices and plots the lines.
-    param_indices: list of integer values (0..N) from sliders
-    param_ids: list of dicts identifying which slider sent which value
+    Reconstructs the parameters from the slider indices and plots either:
+      - view == "throughput": time-series throughput lines (existing behavior)
+      - view == "cdfs": percentile CDFs (raw + weighted) and a horizontal mean line
     """
     fig = go.Figure()
 
     if not selected_resources:
         fig.update_layout(
             template="plotly_white",
-            xaxis_title="Window ID",
+            xaxis_title="Window ID" if view == "throughput" else "Percentile",
             yaxis_title="Throughput",
             annotations=[
                 dict(
@@ -294,9 +404,7 @@ def update_graph(selected_resources, param_indices, param_ids):
         selected_resources = [selected_resources]
 
     # Map the flat list of inputs back to structured data: {resource_key: {col_idx: slider_index_value}}
-    # This allows us to handle multiple resources correctly.
     current_settings = {}
-
     if param_ids and param_indices:
         for val, id_dict in zip(param_indices, param_ids):
             res = id_dict["resource"]
@@ -329,85 +437,123 @@ def update_graph(selected_resources, param_indices, param_ids):
         # Determine Color for this resource
         color = colors[i % len(colors)]
 
-        # --- RECONSTRUCT SELECTED PARAMETER VALUES ---
-        # 1. Get the indices selected by the sliders
-        selected_indices = []
-        param_names = get_param_names(res_key)
-        if not param_names:
-            param_names = [f"p{k}" for k in range(params.shape[1])]
-
         slider_vals_for_res = current_settings.get(res_key, {})
-
-        # If we are just initializing (sliders might not be created yet), default to index 0 for all
         actual_param_vals = []
-
         for col_idx in range(params.shape[1]):
             col_data = params[:, col_idx].astype(int)
             unique_options = sorted(list(np.unique(col_data)))
-
-            # Get slider index (default 0)
             slider_idx = slider_vals_for_res.get(col_idx, 0)
-
-            # Safety clamp
             if slider_idx >= len(unique_options):
                 slider_idx = len(unique_options) - 1
-
-            # Map index -> Real Value
             val = unique_options[slider_idx]
             actual_param_vals.append(val)
 
-        # Find the row in params that matches these values
         best_idx = _find_best_index_for_params(params, actual_param_vals)
 
-        # --- PLOTTING ---
-
-        # Context Traces (Gray):
-        # Only show context if SINGLE resource selected (to avoid mess).
-        # If multiple resources, only show the highlighted lines.
-        if len(selected_resources) == 1:
-            indices_to_plot = range(num_combos)
-            if num_combos > 200:
-                indices_to_plot = np.linspace(0, num_combos - 1, 200, dtype=int)
-
-            for ctx_i in indices_to_plot:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_axis,
-                        y=thr[ctx_i],
-                        mode="lines",  # CHANGED: No markers
-                        line=dict(color="lightgray", width=1),
-                        opacity=0.2,
-                        hoverinfo="skip",
-                        showlegend=False,
+        if view == "throughput":
+            # Existing throughput plotting behavior
+            if len(selected_resources) == 1:
+                indices_to_plot = range(num_combos)
+                if num_combos > 200:
+                    indices_to_plot = np.linspace(0, num_combos - 1, 200, dtype=int)
+                for ctx_i in indices_to_plot:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_axis,
+                            y=thr[ctx_i],
+                            mode="lines",
+                            line=dict(color="lightgray", width=1),
+                            opacity=0.2,
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
                     )
+
+            label_parts = [
+                f"{n}={v}"
+                for n, v in zip(get_param_names(res_key) or [], actual_param_vals)
+            ]
+            label = f"{res_key} ({', '.join(label_parts)})"
+            fig.add_trace(
+                go.Scatter(
+                    x=x_axis,
+                    y=thr[best_idx],
+                    mode="lines",
+                    line=dict(color=color, width=2.5),
+                    name=label,
+                    showlegend=True,
                 )
-
-        # Main Trace
-        # Generate label
-        label_parts = [f"{n}={v}" for n, v in zip(param_names, actual_param_vals)]
-        label = f"{res_key} ({', '.join(label_parts)})"
-
-        fig.add_trace(
-            go.Scatter(
-                x=x_axis,
-                y=thr[best_idx],
-                # CHANGED: 'lines' only prevents crowding. Markers show on hover inherently or we can force them on hover if needed.
-                mode="lines",
-                line=dict(color=color, width=2.5),
-                name=label,
-                showlegend=True,
             )
-        )
 
-    fig.update_layout(
-        title="Throughput Comparison",
-        xaxis_title="Window ID",
-        yaxis_title="Throughput",
-        template="plotly_white",
-        hovermode="x unified",  # Helps compare multiple lines at same X
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=40, r=40, t=80, b=40),
-    )
+        elif view == "cdfs":
+            # CDF view: use canonical compute_cdf_features output (50 raw, 50 weighted, mean)
+            num_points = 50
+            cdf_raw, cdf_weighted, mean_val = compute_cdf_features_safe(
+                thr[best_idx], num_points=num_points
+            )
+
+            # X layout: use the same percentile axis for both curves (overlayed)
+            percentiles = np.linspace(1, 99, num_points)
+
+            fig.add_trace(
+                go.Scatter(
+                    x=percentiles,
+                    y=cdf_raw,
+                    mode="lines",
+                    line=dict(color=color, width=2),
+                    name=f"{res_key} (raw)",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=percentiles,
+                    y=cdf_weighted,
+                    mode="lines",
+                    line=dict(color=color, width=2, dash="dash"),
+                    name=f"{res_key} (weighted)",
+                )
+            )
+            # Mean as a single marker (centered on the percentile axis) and labeled
+            mean_x = float(np.mean(percentiles))
+            fig.add_trace(
+                go.Scatter(
+                    x=[mean_x],
+                    y=[mean_val],
+                    mode="markers+text",
+                    marker=dict(color=color, size=9, symbol="diamond"),
+                    text=[f"mean: {mean_val:.2f}"],
+                    textposition="top center",
+                    hovertemplate=f"{res_key} mean: {{y:.2f}}<extra></extra>",
+                    name=f"{res_key} (mean)",
+                    showlegend=True,
+                )
+            )
+
+    # Final layout adjustments depending on view
+    if view == "throughput":
+        fig.update_layout(
+            title="Throughput Comparison",
+            xaxis_title="Window ID",
+            yaxis_title="Throughput",
+            template="plotly_white",
+            hovermode="x unified",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+            margin=dict(l=40, r=40, t=80, b=40),
+        )
+    else:
+        fig.update_layout(
+            title="Throughput CDFs (percentile → throughput)",
+            xaxis_title="Percentile",
+            yaxis_title="Throughput",
+            template="plotly_white",
+            hovermode="x unified",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+            margin=dict(l=40, r=40, t=80, b=40),
+        )
 
     return fig
 
