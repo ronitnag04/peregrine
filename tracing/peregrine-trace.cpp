@@ -11,8 +11,6 @@ extern "C"
 #include <map>
 #include <algorithm>
 
-// This is more or less copied from the pintool examples
-
 FILE* trace;
 CONTEXT* ctx; 
 
@@ -34,6 +32,8 @@ typedef struct {
   std::string category;
   std::string opcode;
   std::string branch_type; // direct_unconditional, direct_conditional, indirect
+  bool branch_taken;
+  unsigned long branch_target_addr;
   bool inst_sync;          // true if the instruction is a sync point
   std::vector<std::string> read_registers;
   std::vector<std::string> write_registers;
@@ -44,11 +44,6 @@ typedef struct {
 std::vector<mem_access_t> read_addresses;
 std::vector<mem_access_t> write_addresses;
 std::vector<mem_write_t> last_mem_writes;
-
-// Global tracking variables
-UINT32 num_inst_syncs = 0;
-std::map<std::string, UINT32> branch_type_counts;
-
 
 // Set of instructions that are sync points
 std::set<unsigned long> sync_points = {
@@ -98,7 +93,13 @@ std::set<unsigned long> sync_points = {
 // Map to track the last instruction ip that wrote to a register
 std::map<std::string, unsigned long> last_reg_write_ip;
 
+VOID track_branch_address(instruction_data_t *id, unsigned long branch_target_addr) {
+  id->branch_target_addr = branch_target_addr;
+}
 
+VOID track_branch_taken(instruction_data_t *id, BOOL branch_taken) {
+  id->branch_taken = branch_taken;
+}
 
 VOID log_read_op(VOID *ip, VOID *addr, UINT32 size) {
   mem_access_t access;
@@ -106,7 +107,6 @@ VOID log_read_op(VOID *ip, VOID *addr, UINT32 size) {
   access.size = size;
   read_addresses.push_back(access);
 }
-
 
 VOID log_write_op(VOID *ip, VOID *addr, UINT32 size) {
   mem_access_t access;
@@ -144,7 +144,7 @@ std::string escape_csv_field(const std::string& field) {
   return escaped;
 }
 
-VOID log_instruction(CONTEXT* ctx, instruction_data_t *id, xed_decoded_inst_t* xedd) {
+VOID log_instruction(CONTEXT* ctx, instruction_data_t *id) {
   // Compute register dependencies at EXECUTION time (not instrumentation time)
   // This ensures dependencies are tracked based on execution order, not binary order
   for (const auto& reg : id->read_registers) {
@@ -192,6 +192,20 @@ VOID log_instruction(CONTEXT* ctx, instruction_data_t *id, xed_decoded_inst_t* x
   
   // Branch Type
   fprintf(trace, "%s,", escape_csv_field(id->branch_type).c_str());
+
+  // Branch Taken
+  if (id->branch_type != "") {
+    fprintf(trace, "%s,", id->branch_taken ? "true" : "false");
+  } else {
+    fprintf(trace, ",");
+  }
+
+  // Branch Target Address
+  if (id->branch_type != "") {
+    fprintf(trace, "0x%lx,", id->branch_target_addr);
+  } else {
+    fprintf(trace, ",");
+  }
   
   // Instruction Sync
   fprintf(trace, "%s,", id->inst_sync ? "true" : "false");
@@ -308,9 +322,7 @@ VOID log_instruction(CONTEXT* ctx, instruction_data_t *id, xed_decoded_inst_t* x
   write_addresses.clear();
 }
 
-VOID trace_instr(INS ins, VOID* v)
-{
-
+VOID trace_instr(INS ins, VOID* v) {
     instruction_data_t *id = new instruction_data_t();
     id->ip = INS_Address(ins);
     // id->function = RTN_FindNameByAddress(id->ip);
@@ -320,60 +332,46 @@ VOID trace_instr(INS ins, VOID* v)
 
     if (sync_points.find(INS_Opcode(ins)) != sync_points.end()) {
       id->inst_sync = true;
-      num_inst_syncs++;
     }
-
-    if (INS_IsBranch(ins)) {
-      if (INS_IsDirectBranch(ins)) {
-        if (INS_HasFallThrough(ins)) {
-          id->branch_type = "direct_conditional";
-        } else {
-          id->branch_type = "direct_unconditional";
-        }
-      } else {
-        id->branch_type = "indirect";
-      }
-    }
-    branch_type_counts[id->branch_type]++;
 
     // Get registers read by the instruction (at instrumentation time)
-    // Note: Register dependency tracking is done at EXECUTION time in log_instruction()
     UINT32 maxReadRegs = INS_MaxNumRRegs(ins);
     for (UINT32 i = 0; i < maxReadRegs; i++) {
         REG reg = INS_RegR(ins, i);
         REG full_reg = REG_FullRegName(reg);
         std::string reg_name = REG_StringShort(full_reg);
         id->read_registers.push_back(reg_name);
-        // Dependency tracking moved to log_instruction() for execution-time accuracy
     }
 
     // Get registers written by the instruction (at instrumentation time)
-    // Note: last_reg_write_ip update is done at EXECUTION time in log_instruction()
     UINT32 maxWriteRegs = INS_MaxNumWRegs(ins);
     for (UINT32 i = 0; i < maxWriteRegs; i++) {
         REG reg = INS_RegW(ins, i);
         REG full_reg = REG_FullRegName(reg);
         std::string reg_name = REG_StringShort(full_reg);
         id->write_registers.push_back(reg_name);
-        // last_reg_write_ip update moved to log_instruction() for execution-time accuracy
     }
 
-    // Potential calls to add:
-    // INS_IsCacheLineFlush()
-    // INS_OperandCount()
-    // INS_OperandIsReg()
-    // INS_OperandReg()
-    // INS_OperandImmediate()
-    // INS_OperandIsMemory()
-    // INS_OperandMemoryBaseReg()
-    // INS_OperandMemoryDisplacement()
-    // INS_OperandMemoryIndexReg()
-    // INS_OperandMemoryScale()
-    // INS_OperandRead()
-    // INS_OperandReadAndWritten()
-    // INS_OperandReadOnly()
-    // INS_OperandWritten()
-    // INS_OperandWrittenOnly()
+    // Determine branch type at instrumentation time (static property)
+    if (INS_IsBranch(ins)) {
+      if (INS_IsDirectBranch(ins)) {
+        if (INS_HasFallThrough(ins)) {
+          id->branch_type = "direct_conditional";
+          INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)track_branch_taken, IARG_PTR, id, IARG_BRANCH_TAKEN, IARG_END);
+        } else {
+          id->branch_type = "direct_unconditional";
+          id->branch_taken = true;
+        }
+      } else {
+        id->branch_type = "indirect";
+        id->branch_taken = true;
+      }
+    }
+
+    // Track branch address
+    if (INS_IsControlFlow(ins)) {
+      INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)track_branch_address, IARG_PTR, id, IARG_BRANCH_TARGET_ADDR, IARG_END);
+    }
 
     UINT32 memOperands = INS_MemoryOperandCount(ins);
     for (UINT32 memOp = 0; memOp < memOperands; memOp++) {
@@ -395,19 +393,11 @@ VOID trace_instr(INS ins, VOID* v)
 
     // Call the log_instruction function to log the instruction information
     INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)log_instruction, IARG_CONTEXT, IARG_PTR, id, IARG_END);
-
 }
 
 VOID Fini(INT32 code, VOID* v)
 {	
 	fclose(trace);
-  
-  trace = fopen("trace_summary.txt", "w");
-  fprintf(trace, "Number of instruction sync points: %u\n", num_inst_syncs);
-  fprintf(trace, "Number of direct unconditional branches: %u\n", branch_type_counts.count("direct_unconditional") ? branch_type_counts["direct_unconditional"] : 0);
-  fprintf(trace, "Number of direct conditional branches: %u\n", branch_type_counts.count("direct_conditional") ? branch_type_counts["direct_conditional"] : 0);
-  fprintf(trace, "Number of indirect branches: %u\n", branch_type_counts.count("indirect") ? branch_type_counts["indirect"] : 0);
-  fclose(trace);
 }
 
 
@@ -422,7 +412,7 @@ int main(int argc, char* argv[])
 	trace = fopen("trace.csv", "w");
 	
 	// Write CSV header
-	fprintf(trace, "IP,Assembly,Category,Opcode,Branch Type,Instruction Sync,Read Registers,Write Registers,Register Dependent IPs,Read Addresses,Write Addresses,Memory Dependent IPs\n");
+	fprintf(trace, "IP,Assembly,Category,Opcode,Branch Type,Branch Taken,Branch Target Address,Instruction Sync,Read Registers,Write Registers,Register Dependent IPs,Read Addresses,Write Addresses,Memory Dependent IPs\n");
 
 	INS_AddInstrumentFunction(trace_instr, 0);
 

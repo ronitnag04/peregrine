@@ -14,6 +14,7 @@ The parser performs the following operations:
    - Assembly code
    - Instruction category and opcode
    - Branch type information
+   - Branch taken status and target address
    - Synchronization point flags
    - Register dependencies (read/write)
    - Memory access information (read/write addresses with sizes)
@@ -40,6 +41,8 @@ typedef struct {
     std::string category;                      // Instruction category (e.g., DATAXFER, CALL)
     std::string opcode;                        // Instruction opcode (e.g., MOV, CALL_NEAR)
     std::string branch_type;                   // Branch type (direct_conditional, direct_unconditional, indirect, or empty)
+    bool branch_taken;                         // True if branch was taken (only valid for branch instructions)
+    unsigned long branch_target_addr;          // Target address of branch (only valid for branch instructions)
     bool inst_sync;                            // True if instruction is a synchronization point
     std::vector<std::string> read_registers;    // Registers read by the instruction
     std::vector<std::string> write_registers;   // Registers written by the instruction
@@ -129,6 +132,8 @@ Instruction 0:
   Category: DATAXFER
   Opcode: MOV
   Branch Type: (none)
+  Branch Taken: (none)
+  Branch Target Address: (none)
   Instruction Sync: false
   Read Registers: rsp
   Write Registers: rdi
@@ -147,13 +152,15 @@ The parser expects CSV files with the following columns (in order):
 3. **Category**: Instruction category
 4. **Opcode**: Instruction opcode
 5. **Branch Type**: Branch type or empty
-6. **Instruction Sync**: `true` or `false`
-7. **Read Registers**: Semicolon-separated register names (e.g., `rip;rsp`)
-8. **Write Registers**: Semicolon-separated register names
-9. **Register Dependent IPs**: Semicolon-separated hex IPs (e.g., `0x72b5241aa293`)
-10. **Read Addresses**: Semicolon-separated addresses in format `0xADDR(SIZE)` (e.g., `0x7ffe8bb8af68(8)`)
-11. **Write Addresses**: Semicolon-separated addresses in format `0xADDR(SIZE)`
-12. **Memory Dependent IPs**: Semicolon-separated hex IPs
+6. **Branch Taken**: `true` or `false` (only valid for branch instructions, empty otherwise)
+7. **Branch Target Address**: Target address of branch in hex format (only valid for branch instructions, empty otherwise)
+8. **Instruction Sync**: `true` or `false`
+9. **Read Registers**: Semicolon-separated register names (e.g., `rip;rsp`). Note: Partial registers are normalized to their full register (e.g., EAX → RAX) for accurate dependency tracking.
+10. **Write Registers**: Semicolon-separated register names. Partial registers are normalized to full registers.
+11. **Register Dependent IPs**: Semicolon-separated hex IPs (e.g., `0x72b5241aa293`)
+12. **Read Addresses**: Semicolon-separated addresses in format `0xADDR(SIZE)` (e.g., `0x7ffe8bb8af68(8)`)
+13. **Write Addresses**: Semicolon-separated addresses in format `0xADDR(SIZE)`
+14. **Memory Dependent IPs**: Semicolon-separated hex IPs
 
 ## Modifying the Parser
 
@@ -183,7 +190,7 @@ analyze_instructions(instructions);
 
 ### 2. Modifying Output Format
 
-Edit the `print_instruction()` function (starting at line 241) to change how instructions are displayed:
+Edit the `print_instruction()` function (starting at line 259) to change how instructions are displayed:
 
 ```cpp
 void print_instruction(const instruction_data_t& inst, int index) {
@@ -240,7 +247,7 @@ void export_to_json(const std::vector<instruction_data_t>& instructions,
 
 ### 5. Adding New Command-Line Options
 
-Modify the argument parsing section in `main()` (starting around line 276):
+Modify the argument parsing section in `main()` (starting around line 373):
 
 ```cpp
 // Add new option
@@ -297,7 +304,7 @@ void build_dependency_graph(const std::vector<instruction_data_t>& instructions)
 - **Purpose**: Parse a CSV file and return a vector of instruction data
 - **Parameters**: CSV filename (string)
 - **Returns**: `std::vector<instruction_data_t>`
-- **Location**: Line ~200
+- **Location**: Line ~213
 
 ### `parse_csv_line(line)`
 - **Purpose**: Parse a single CSV line into an instruction struct
@@ -309,7 +316,7 @@ void build_dependency_graph(const std::vector<instruction_data_t>& instructions)
 - **Purpose**: Print formatted instruction information
 - **Parameters**: Instruction struct and index
 - **Returns**: void
-- **Location**: Line ~241
+- **Location**: Line ~259
 
 ### `parse_mem_address(mem_str)`
 - **Purpose**: Parse memory address string in format `0xADDR(SIZE)`

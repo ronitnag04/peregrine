@@ -45,12 +45,22 @@ class Parser:
                             print(f"Skipping row {i+2}: Missing or unknown opcode '{row['Opcode']}'.")
                             continue
 
+                        branch_type = self._parse_branch_type(row['Branch Type'])
+                        if branch_type is None:
+                            branch_taken = False
+                            branch_target_addr = 0
+                        else:
+                            branch_taken = self._parse_bool(row['Branch Taken'])
+                            branch_target_addr = np.uint64(int(row['Branch Target Address'], 16))
+
                         inst = Instruction(
                             inst_ptr=np.uint64(int(row['IP'], 16)),
                             assembly=row['Assembly'],
                             category=row['Category'],
                             opcode=opcode,
                             branch_type=self._parse_branch_type(row['Branch Type']),
+                            branch_taken=branch_taken,
+                            branch_target_addr=branch_target_addr,
                             inst_sync=self._parse_bool(row['Instruction Sync']),
                             read_regs=self._parse_register_list(row['Read Registers']),
                             write_regs=self._parse_register_list(row['Write Registers']),

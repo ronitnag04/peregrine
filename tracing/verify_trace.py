@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Script to verify trace.csv correctness based on test assembly files.
-Checks for: IP tracking, branch types, sync barriers, register dependencies,
-memory dependencies, read/write registers, read/write addresses.
+Checks for: IP tracking, branch types, branch taken/target tracking, sync barriers,
+register dependencies, memory dependencies, read/write registers, read/write addresses.
 """
 
 import csv
@@ -73,12 +73,6 @@ class TraceVerifier:
         """Verify branch types: direct_unconditional, direct_conditional, indirect."""
         print("\n[2] Checking branch types...")
         
-        expected_branches = {
-            'direct_unconditional': ['JMP'],
-            'direct_conditional': ['JNE', 'JE', 'JZ', 'JNZ', 'JA', 'JB', 'JBE', 'JAE'],
-            'indirect': ['JMP']  # Indirect JMP
-        }
-        
         found_branches = defaultdict(set)
         indirect_branches = []
         
@@ -106,6 +100,177 @@ class TraceVerifier:
                 self.warnings.append(f"No {branch_type} branches found")
         
         return all_found
+    
+    def check_branch_taken_and_target(self):
+        """Verify branch taken and branch target address fields are tracked properly."""
+        print("\n[2a] Checking branch taken and target address tracking...")
+        
+        branch_issues = []
+        branches_with_taken = 0
+        branches_with_target = 0
+        unconditional_taken = 0
+        conditional_taken = 0
+        conditional_not_taken = 0
+        indirect_taken = 0
+        
+        for instr in self.instructions:
+            ip = instr.get('IP', '').strip()
+            branch_type = instr.get('Branch Type', '').strip()
+            branch_taken = instr.get('Branch Taken', '').strip().lower()
+            branch_target = instr.get('Branch Target Address', '').strip()
+            opcode = instr.get('Opcode', '').strip()
+            assembly = instr.get('Assembly', '').strip()
+            
+            if branch_type:
+                # This is a branch instruction - should have branch_taken and branch_target
+                if not branch_taken:
+                    branch_issues.append((ip, f"Branch instruction missing 'Branch Taken' field"))
+                    self.errors.append(f"IP {ip} ({assembly}): Branch instruction missing 'Branch Taken' field")
+                elif branch_taken not in ['true', 'false']:
+                    branch_issues.append((ip, f"Branch instruction has invalid 'Branch Taken' value: '{branch_taken}'"))
+                    self.errors.append(f"IP {ip} ({assembly}): Invalid 'Branch Taken' value: '{branch_taken}'")
+                else:
+                    branches_with_taken += 1
+                    if branch_taken == 'true':
+                        if branch_type == 'direct_unconditional':
+                            unconditional_taken += 1
+                        elif branch_type == 'direct_conditional':
+                            conditional_taken += 1
+                        elif branch_type == 'indirect':
+                            indirect_taken += 1
+                    else:  # branch_taken == 'false'
+                        if branch_type == 'direct_conditional':
+                            conditional_not_taken += 1
+                
+                if not branch_target:
+                    branch_issues.append((ip, f"Branch instruction missing 'Branch Target Address' field"))
+                    self.errors.append(f"IP {ip} ({assembly}): Branch instruction missing 'Branch Target Address' field")
+                else:
+                    # Check if target address is valid hex format
+                    if not re.match(r'^0x[0-9a-fA-F]+$', branch_target):
+                        branch_issues.append((ip, f"Branch instruction has invalid target address format: '{branch_target}'"))
+                        self.errors.append(f"IP {ip} ({assembly}): Invalid target address format: '{branch_target}'")
+                    else:
+                        branches_with_target += 1
+                        # Check that target address is not 0 (unless it's an indirect branch that wasn't taken)
+                        target_val = int(branch_target, 16)
+                        if target_val == 0 and branch_type != 'indirect':
+                            branch_issues.append((ip, f"Direct branch has zero target address"))
+                            self.warnings.append(f"IP {ip} ({assembly}): Direct branch has zero target address (may be valid for indirect not-taken)")
+            else:
+                # This is NOT a branch instruction - should have empty branch_taken and branch_target
+                if branch_taken:
+                    branch_issues.append((ip, f"Non-branch instruction has 'Branch Taken' field set: '{branch_taken}'"))
+                    self.warnings.append(f"IP {ip} ({assembly}): Non-branch instruction has 'Branch Taken' field set")
+                
+                if branch_target:
+                    branch_issues.append((ip, f"Non-branch instruction has 'Branch Target Address' field set: '{branch_target}'"))
+                    self.warnings.append(f"IP {ip} ({assembly}): Non-branch instruction has 'Branch Target Address' field set")
+        
+        # Report findings
+        if branches_with_taken > 0:
+            print(f"  ✓ Found {branches_with_taken} branches with 'Branch Taken' field set")
+            if unconditional_taken > 0:
+                print(f"    - {unconditional_taken} direct unconditional branches (all should be taken=true)")
+            if conditional_taken > 0:
+                print(f"    - {conditional_taken} direct conditional branches taken (taken=true)")
+            if conditional_not_taken > 0:
+                print(f"    - {conditional_not_taken} direct conditional branches not taken (taken=false)")
+            if indirect_taken > 0:
+                print(f"    - {indirect_taken} indirect branches taken (taken=true)")
+        
+        if branches_with_target > 0:
+            print(f"  ✓ Found {branches_with_target} branches with 'Branch Target Address' field set")
+        
+        if branch_issues:
+            print(f"  ✗ Found {len(branch_issues)} issues with branch tracking")
+            # Show first 10 issues
+            for ip, issue in branch_issues[:10]:
+                print(f"    - IP {ip}: {issue}")
+            if len(branch_issues) > 10:
+                print(f"    ... and {len(branch_issues) - 10} more issues")
+            return False
+        
+        if branches_with_taken == 0 and branches_with_target == 0:
+            print(f"  ⚠ No branches found with taken/target fields (may be expected)")
+            return True
+        
+        # Additional verification: Check that direct unconditional branches are always taken
+        unconditional_not_taken = 0
+        for instr in self.instructions:
+            branch_type = instr.get('Branch Type', '').strip()
+            branch_taken = instr.get('Branch Taken', '').strip().lower()
+            if branch_type == 'direct_unconditional' and branch_taken == 'false':
+                unconditional_not_taken += 1
+                ip = instr.get('IP', '').strip()
+                assembly = instr.get('Assembly', '').strip()
+                self.errors.append(f"IP {ip} ({assembly}): Direct unconditional branch should always be taken=true")
+        
+        if unconditional_not_taken > 0:
+            print(f"  ✗ Found {unconditional_not_taken} direct unconditional branches with taken=false (should always be true)")
+            return False
+        
+        # Check that when branch_taken is "true", the next instruction's IP matches branch_target
+        taken_branches_verified = 0
+        taken_branches_mismatch = []
+        
+        for i, instr in enumerate(self.instructions):
+            branch_taken = instr.get('Branch Taken', '').strip().lower()
+            branch_target = instr.get('Branch Target Address', '').strip()
+            branch_type = instr.get('Branch Type', '').strip()
+            ip = instr.get('IP', '').strip()
+            assembly = instr.get('Assembly', '').strip()
+            
+            if branch_taken == 'true' and branch_target:
+                # This branch was taken - next instruction should be at branch_target
+                if i + 1 < len(self.instructions):
+                    next_instr = self.instructions[i + 1]
+                    next_ip = next_instr.get('IP', '').strip()
+                    
+                    try:
+                        # Parse addresses (both should be in hex format with 0x prefix)
+                        target_val = int(branch_target, 16) if branch_target.startswith('0x') else int(branch_target, 16)
+                        next_ip_val = int(next_ip, 16) if next_ip.startswith('0x') else int(next_ip, 16)
+                        
+                        if next_ip_val == target_val:
+                            taken_branches_verified += 1
+                        else:
+                            taken_branches_mismatch.append((
+                                ip, assembly, branch_type, branch_target, next_ip
+                            ))
+                            self.errors.append(
+                                f"IP {ip} ({assembly}): Branch taken=true but next instruction IP {next_ip} "
+                                f"does not match branch target {branch_target}"
+                            )
+                    except (ValueError, AttributeError):
+                        # Skip if we can't parse addresses
+                        self.warnings.append(
+                            f"IP {ip} ({assembly}): Could not parse branch target or next IP for verification"
+                        )
+                else:
+                    # This is the last instruction in trace - can't verify
+                    self.warnings.append(
+                        f"IP {ip} ({assembly}): Branch taken=true but no next instruction to verify target"
+                    )
+        
+        # Report findings
+        if taken_branches_verified > 0:
+            print(f"  ✓ Verified {taken_branches_verified} taken branches: next instruction IP matches branch target")
+        
+        if taken_branches_mismatch:
+            print(f"  ✗ Found {len(taken_branches_mismatch)} taken branches where next instruction IP doesn't match target")
+            # Show first 5 mismatches
+            for ip, assembly, branch_type, target, next_ip in taken_branches_mismatch[:5]:
+                print(f"    - IP {ip}: target={target}, next IP={next_ip}")
+            if len(taken_branches_mismatch) > 5:
+                print(f"    ... and {len(taken_branches_mismatch) - 5} more mismatches")
+            return False
+        
+        if taken_branches_verified == 0 and branches_with_taken > 0:
+            print(f"  ⚠ No taken branches verified (may be expected if trace ends with branches)")
+        
+        print(f"  ✓ Branch taken and target address tracking looks correct")
+        return True
     
     def check_sync_barriers(self):
         """Verify instruction sync barriers are detected."""
@@ -493,6 +658,7 @@ class TraceVerifier:
         checks = [
             self.check_ip_tracking,
             self.check_branch_types,
+            self.check_branch_taken_and_target,
             self.check_sync_barriers,
             self.check_register_operations,
             self.check_register_normalization,

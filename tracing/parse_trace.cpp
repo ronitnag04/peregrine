@@ -19,6 +19,8 @@ typedef struct {
     std::string category;
     std::string opcode;
     std::string branch_type;
+    bool branch_taken;
+    unsigned long branch_target_addr;
     bool inst_sync;
     std::vector<std::string> read_registers;
     std::vector<std::string> write_registers;
@@ -136,23 +138,39 @@ instruction_data_t parse_csv_line(const std::string& line) {
     // Branch Type (column 4)
     inst.branch_type = parse_csv_field(line, pos);
     
-    // Instruction Sync (column 5)
+    // Branch Taken (column 5)
+    std::string branch_taken_str = parse_csv_field(line, pos);
+    if (!branch_taken_str.empty()) {
+        inst.branch_taken = (branch_taken_str == "true");
+    } else {
+        inst.branch_taken = false;
+    }
+    
+    // Branch Target Address (column 6)
+    std::string branch_target_str = parse_csv_field(line, pos);
+    if (!branch_target_str.empty()) {
+        inst.branch_target_addr = parse_hex(branch_target_str);
+    } else {
+        inst.branch_target_addr = 0;
+    }
+    
+    // Instruction Sync (column 7)
     std::string sync_str = parse_csv_field(line, pos);
     inst.inst_sync = (sync_str == "true");
     
-    // Read Registers (column 6)
+    // Read Registers (column 8)
     std::string read_regs_str = parse_csv_field(line, pos);
     if (!read_regs_str.empty()) {
         inst.read_registers = split(read_regs_str, ';');
     }
     
-    // Write Registers (column 7)
+    // Write Registers (column 9)
     std::string write_regs_str = parse_csv_field(line, pos);
     if (!write_regs_str.empty()) {
         inst.write_registers = split(write_regs_str, ';');
     }
     
-    // Register Dependent IPs (column 8)
+    // Register Dependent IPs (column 10)
     std::string reg_dep_ips_str = parse_csv_field(line, pos);
     if (!reg_dep_ips_str.empty()) {
         std::vector<std::string> ip_strs = split(reg_dep_ips_str, ';');
@@ -161,7 +179,7 @@ instruction_data_t parse_csv_line(const std::string& line) {
         }
     }
     
-    // Read Addresses (column 9)
+    // Read Addresses (column 11)
     std::string read_addrs_str = parse_csv_field(line, pos);
     if (!read_addrs_str.empty()) {
         std::vector<std::string> addr_strs = split(read_addrs_str, ';');
@@ -170,7 +188,7 @@ instruction_data_t parse_csv_line(const std::string& line) {
         }
     }
     
-    // Write Addresses (column 10)
+    // Write Addresses (column 12)
     std::string write_addrs_str = parse_csv_field(line, pos);
     if (!write_addrs_str.empty()) {
         std::vector<std::string> addr_strs = split(write_addrs_str, ';');
@@ -179,7 +197,7 @@ instruction_data_t parse_csv_line(const std::string& line) {
         }
     }
     
-    // Memory Dependent IPs (column 11)
+    // Memory Dependent IPs (column 13)
     std::string mem_dep_ips_str = parse_csv_field(line, pos);
     if (!mem_dep_ips_str.empty()) {
         std::vector<std::string> ip_strs = split(mem_dep_ips_str, ';');
@@ -245,6 +263,13 @@ void print_instruction(const instruction_data_t& inst, int index) {
     std::cout << "  Category: " << inst.category << std::endl;
     std::cout << "  Opcode: " << inst.opcode << std::endl;
     std::cout << "  Branch Type: " << (inst.branch_type.empty() ? "(none)" : inst.branch_type) << std::endl;
+    if (!inst.branch_type.empty()) {
+        std::cout << "  Branch Taken: " << (inst.branch_taken ? "true" : "false") << std::endl;
+        std::cout << "  Branch Target Address: 0x" << std::hex << inst.branch_target_addr << std::dec << std::endl;
+    } else {
+        std::cout << "  Branch Taken: (none)" << std::endl;
+        std::cout << "  Branch Target Address: (none)" << std::endl;
+    }
     std::cout << "  Instruction Sync: " << (inst.inst_sync ? "true" : "false") << std::endl;
     
     // Read Registers

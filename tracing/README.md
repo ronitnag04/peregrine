@@ -11,6 +11,8 @@ The tracing tool instruments programs at runtime and generates a comprehensive C
 - **Instruction Categories**: High-level category (e.g., BINARY, DATAXFER, CONTROL)
 - **Opcodes**: Specific instruction opcodes
 - **Branch Types**: Classification of branches (direct_unconditional, direct_conditional, indirect)
+- **Branch Taken Status**: Whether branches were taken at execution time
+- **Branch Target Addresses**: Target addresses of branch instructions
 - **Synchronization Barriers**: Detection of memory fences, atomic operations, and serializing instructions
 - **Register Operations**: Registers read and written by each instruction
 - **Memory Operations**: Memory addresses read from and written to
@@ -27,6 +29,8 @@ The tracing tool instruments programs at runtime and generates a comprehensive C
 - **Direct Unconditional Branches**: Direct jumps (e.g., `jmp label`) - tracked as "direct_unconditional"
 - **Direct Conditional Branches**: Conditional jumps (e.g., `jne`, `je`) - tracked as "direct_conditional"
 - **Indirect Branches**: Branches through registers or memory (e.g., `jmp *%rax`)
+- **Branch Taken Tracking**: Records whether branches were taken or not taken at execution time
+- **Branch Target Addresses**: Captures the target address of all branch instructions
 
 ### Synchronization Barriers
 Detects and marks synchronization points including:
@@ -105,14 +109,10 @@ $PIN_ROOT/pin -t obj-intel64/peregrine-trace.so -- ls -la
 
 ### Output Files
 
-The tracing tool generates two output files:
+The tracing tool generates one output file:
 
 1. **`trace.csv`**: Main trace file containing instruction-by-instruction execution data
-   - CSV format with columns: IP, Assembly, Category, Opcode, Branch Type, Instruction Sync, Read Registers, Write Registers, Register Dependent IPs, Read Addresses, Write Addresses, Memory Dependent IPs
-
-2. **`trace_summary.txt`**: Summary statistics
-   - Number of instruction sync points
-   - Counts of different branch types
+   - CSV format with columns: IP, Assembly, Category, Opcode, Branch Type, Branch Taken, Branch Target Address, Instruction Sync, Read Registers, Write Registers, Register Dependent IPs, Read Addresses, Write Addresses, Memory Dependent IPs
 
 ### CSV Output Format
 
@@ -123,6 +123,8 @@ Each row in `trace.csv` represents one executed instruction with the following f
 - **Category**: Instruction category (e.g., BINARY, DATAXFER, CONTROL)
 - **Opcode**: Instruction opcode (e.g., MOV, ADD, JMP)
 - **Branch Type**: Branch classification (empty for non-branches)
+- **Branch Taken**: "true" if branch was taken, "false" if not taken (only present for branch instructions, empty otherwise)
+- **Branch Target Address**: Target address of branch in hexadecimal format (only present for branch instructions, empty otherwise)
 - **Instruction Sync**: "true" if instruction is a synchronization barrier, "false" otherwise
 - **Read Registers**: Semicolon-separated list of registers read (e.g., "rax;rbx"). Partial registers (e.g., EAX, AX, AL) are normalized to their full register (e.g., RAX) for accurate dependency tracking.
 - **Write Registers**: Semicolon-separated list of registers written. Partial registers are normalized to full registers.
@@ -182,20 +184,12 @@ For detailed test coverage information, see `TEST_README.md`.
 ### Trace CSV Sample
 
 ```csv
-IP,Assembly,Category,Opcode,Branch Type,Instruction Sync,Read Registers,Write Registers,Register Dependent IPs,Read Addresses,Write Addresses,Memory Dependent IPs
-0x400000,mov $0x100, %rax,DATAXFER,MOV,,false,,rax,,,
-0x400007,mov %rax, %rbx,DATAXFER,MOV,,false,rax,rbx,0x400000,,
-0x40000a,mov test_var(%rip), %rdx,DATAXFER,MOV,,false,,rdx,,0x600000(8),
-0x400011,mfence,CONTROL,MFENCE,,true,,,,
-```
-
-### Trace Summary Sample
-
-```
-Number of instruction sync points: 5
-Number of direct unconditional branches: 1
-Number of direct conditional branches: 2
-Number of indirect branches: 1
+IP,Assembly,Category,Opcode,Branch Type,Branch Taken,Branch Target Address,Instruction Sync,Read Registers,Write Registers,Register Dependent IPs,Read Addresses,Write Addresses,Memory Dependent IPs
+0x400000,mov $0x100, %rax,DATAXFER,MOV,,,false,,rax,,,
+0x400007,mov %rax, %rbx,DATAXFER,MOV,,,false,rax,rbx,0x400000,,
+0x40000a,mov test_var(%rip), %rdx,DATAXFER,MOV,,,false,,rdx,,0x600000(8),
+0x400011,mfence,CONTROL,MFENCE,,,true,,,,
+0x400016,jne 0x400020,CONTROL,Jcc,direct_conditional,true,0x400020,false,,
 ```
 
 ## Notes

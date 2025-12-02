@@ -42,15 +42,29 @@ The test file exercises the following tracing features:
 
 #### Direct Unconditional Branch
 - **Test 5**: `jmp branch_label1` (direct unconditional)
+- **Test 23**: `jmp test_uncond_branch1` (direct unconditional, with dummy instructions for IP difference detection)
+- **Test 24**: `jmp test_uncond_branch2` (direct unconditional, another example with dummy instructions)
 
 #### Direct Conditional Branch (Taken)
 - **Test 6**: `cmp $0, %rax; jne branch_label2` (direct conditional, will be taken since RAX != 0)
+- **Test 25**: `cmp $0, %rdx; jne test_cond_taken1` (direct conditional JNE, will be taken since RDX != 0, with dummy instructions)
+- **Test 26**: `cmp $0x30, %r10; jg test_cond_taken2` (direct conditional JG, will be taken since 80 > 48, with dummy instructions)
+- **Test 29**: `test %rdx, %rdx; jz test_cond_taken3` (direct conditional JZ, will be taken since RDX == 0 sets ZF, with dummy instructions)
 
 #### Direct Conditional Branch (Not Taken)
 - **Test 7**: `cmp $0, %rax; je branch_label3` (direct conditional, will NOT be taken since RAX != 0)
+- **Test 27**: `cmp $0, %r13; je test_cond_not_taken1` (direct conditional JE, will NOT be taken since R13 != 0, with dummy instructions)
+- **Test 28**: `cmp $0x30, %rax; jl test_cond_not_taken2` (direct conditional JL, will NOT be taken since 80 is NOT < 48, with dummy instructions)
+- **Test 30**: `test %rdi, %rdi; jz test_cond_not_taken3` (direct conditional JZ, will NOT be taken since RDI != 0, ZF not set, with dummy instructions)
 
 #### Indirect Branch
 - **Test 8**: `lea branch_label4(%rip), %r11; jmp *%r11` (indirect branch via register)
+- **Test 31**: `lea test_indirect_target1(%rip), %r10; jmp *%r10` (indirect branch via register R10, with dummy instructions)
+- **Test 32**: `lea test_indirect_target2(%rip), %r12; mov %r12, %r13; jmp *%r13` (indirect branch via register R13, with dummy instructions)
+- **Test 33**: `lea test_indirect_target3(%rip), %r15; mov %r15, test_var(%rip); jmp *test_var(%rip)` (indirect branch via memory, with dummy instructions)
+- **Test 34**: `lea test_indirect_target4(%rip), %rcx; add $0, %rcx; jmp *%rcx` (indirect branch via register RCX with dependency chain, with dummy instructions)
+
+**Note**: Tests 23-34 include dummy instructions (nop, mov, add, sub) between branch instructions and their target labels to create significant IP differences that can be easily detected in the trace. This helps verify that branch target addresses are correctly identified and IP jumps are properly tracked.
 
 ### 8. Instruction Sync Barriers
 
@@ -130,7 +144,9 @@ The trace should show:
 
 1. **IP addresses** for every instruction
 2. **Branch types**: "direct_unconditional", "direct_conditional", "indirect"
-3. **Instruction sync**: "true" for MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP
+3. **Branch behavior**: Direct conditional branches should show whether they are taken or not taken based on the condition
+4. **IP differences**: Significant IP gaps between branch instructions and their target addresses (especially in Tests 23-34 with dummy instructions)
+5. **Instruction sync**: "true" for MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP
 4. **Read registers**: e.g., "rax", "rbx", etc. (partial registers like EAX, AX, AL are normalized to their full register, e.g., RAX)
 5. **Write registers**: e.g., "rax", "rbx", etc. (partial registers are normalized to full registers for accurate dependency tracking)
 6. **Register dependent IPs**: IPs of instructions that wrote registers being read
@@ -155,8 +171,10 @@ make -f Makefile.test verify
 The verification script checks:
 
 1. **IP Tracking**: All instructions have IP addresses
-2. **Branch Types**: Direct_unconditional, direct_conditional, and indirect branches
-3. **Sync Barriers**: MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP are marked as sync
+2. **Branch Types**: Direct_unconditional, direct_conditional, and indirect branches (Tests 5-8, 23-34)
+3. **Branch Behavior**: Direct conditional branches correctly identified as taken or not taken (Tests 6-7, 25-30)
+4. **IP Differences**: Detectable IP gaps between branch instructions and target addresses (Tests 23-34 with dummy instructions)
+5. **Sync Barriers**: MFENCE, SFENCE, LFENCE, CPUID, XCHG, CMPXCHG, RDTSC, RDTSCP are marked as sync
 4. **Register Operations**: Register reads and writes are tracked
 5. **Register Dependencies**: Instructions show dependencies on previous instructions that wrote the registers they read
 6. **Register Normalization**: Partial registers (EAX, AX, AL, AH, ESI, SI, etc.) are normalized to full registers (RAX, RSI, etc.) for accurate dependency tracking
@@ -172,9 +190,12 @@ The script will report:
 ### Manual Verification Checklist
 
 - [ ] All instructions have IP addresses
-- [ ] Direct unconditional branch detected (jmp)
-- [ ] Direct conditional branches detected (jne, je)
-- [ ] Indirect branch detected (jmp *%r11)
+- [ ] Direct unconditional branch detected (jmp) - Tests 5, 23, 24
+- [ ] Direct conditional branches detected (jne, je, jg, jl, jz) - Tests 6, 7, 25-30
+- [ ] Direct conditional branches correctly identified as taken (jne, jg, jz when conditions are met) - Tests 6, 25, 26, 29
+- [ ] Direct conditional branches correctly identified as not taken (je, jl, jz when conditions are not met) - Tests 7, 27, 28, 30
+- [ ] Indirect branch detected (jmp *%reg, jmp *mem) - Tests 8, 31-34
+- [ ] IP differences between branch instructions and target addresses are detectable (dummy instructions create gaps) - Tests 23-34
 - [ ] Sync barriers detected (mfence, sfence, lfence, cpuid, xchg, cmpxchg, rdtsc, rdtscp)
 - [ ] Register reads tracked (rax, rbx, rcx, etc.)
 - [ ] Register writes tracked (rax, rbx, rcx, etc.)
