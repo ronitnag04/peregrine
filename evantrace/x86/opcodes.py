@@ -96,6 +96,7 @@ class Opcode(Enum):
     # --- Flags & System ---
     SETZ    = { 'reg_reg': 1, 'mem_reg': 3, 'reg_mem': 3 }
     SETNZ   = { 'reg_reg': 1, 'reg_mem': 3 }
+    SETNB   = { 'reg_reg': 1, 'mem_reg': 3, 'reg_mem': 3 }
     SETO    = { 'reg_reg': 1, 'reg_mem': 3 }
     SETNLE  = { 'reg_reg': 1, 'reg_mem': 3 }
     CLC     = { 'reg_reg': 1 } 
@@ -127,10 +128,11 @@ class Opcode(Enum):
     JS        = { 'reg_reg': 1 }
     JNS       = { 'reg_reg': 1 }
     JB        = { 'reg_reg': 1 }
+    JP        = { 'reg_reg': 1 }
     JNB       = { 'reg_reg': 1 }
     JBE       = { 'reg_reg': 1 }
     JNBE      = { 'reg_reg': 1 }
-    JECXZ     = { 'reg_reg': 2 }
+    JECXZ     = { 'reg_reg': 2, 'mem_reg': 2, 'reg_mem': 2 }
     JRCXZ     = { 'reg_reg': 2 } 
 
     # --- Strings (Scalar) ---
@@ -324,9 +326,11 @@ class Opcode(Enum):
     
     # --- Data Movement ---
     MOVAPS    = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 } # VMOVAPS
+    MOVAPD    = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
     MOVUPS    = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
     MOVSS     = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
     MOVSD     = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
+    MOVSD_XMM = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
     MOVHPS    = { 'mem_reg': 4, 'reg_mem': 3 }
     MOVHPD    = { 'mem_reg': 4, 'reg_mem': 3 }
     MOVLPS    = { 'mem_reg': 4, 'reg_mem': 3 }
@@ -377,7 +381,7 @@ class Opcode(Enum):
     MULPS     = { 'reg_reg': 4, 'mem_reg': 5 }
     MULPD     = { 'reg_reg': 4, 'mem_reg': 5 }
     DIVSS     = { 'reg_reg': 11 } 
-    DIVSD     = { 'reg_reg': 14 } # 13-14
+    DIVSD     = { 'reg_reg': 14, 'mem_reg': 14 } # 13-14
     DIVPS     = { 'reg_reg': 11 }
     DIVPD     = { 'reg_reg': 14 } # 13-14
     SQRTSS    = { 'reg_reg': 12 }
@@ -443,6 +447,9 @@ class Opcode(Enum):
     XRSTOR      = { 'mem_reg': 80 }
     XSAVE       = { 'mem_reg': 137 }
     XSAVEC      = { 'reg_mem': 84 }
+
+    # --- Hacked in ---
+    FNSTCW      = { 'reg_reg': 1, 'mem_reg': 4, 'reg_mem': 3 }
     
     def reg_reg_latency(self):
         try:
