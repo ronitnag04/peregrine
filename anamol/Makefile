@@ -2,8 +2,13 @@ CXX := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra
 INCLUDE := -I include -I src
 
-# OpenMP flag
+# OpenMP usage: set OMP=0 to disable OpenMP (e.g., make OMP=0)
+OMP ?= 1
+ifeq ($(OMP),1)
 OMP_FLAG := -fopenmp
+else
+OMP_FLAG :=
+endif
 
 SRC_DIR := src
 TOOLS_DIR := $(SRC_DIR)/tools
