@@ -1,12 +1,11 @@
+#include <cassert>
+#include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <map>
-#include <cstdio>
-#include <cassert>
 
-#include "ext.h"
 #include "instr.h"
 #include "models.h"
 #include "params.h"
@@ -24,11 +23,13 @@ const uint64_t LARGE_CONSTANT = 1000000000ULL;
 ////////////////////////////////////////////////////////////////////////////
 
 /* Implements Algorithm 1 from the paper. */
-uint64_t resp_cycle(
-  uint64_t req_cycle,                           // request cycle for the instruction
-  Instr& instr,                                  // instruction
-  std::map<uint64_t, uint64_t>& last_req_cycles, // last request cycles for each cache line
-  std::map<uint64_t, uint64_t>& last_resp_cycles // last response cycles for each cache line
+unsigned resp_cycle(
+    unsigned req_cycle,  // request cycle for the instruction
+    const Instr& instr,  // instruction
+    std::map<unsigned, unsigned>&
+        last_req_cycles,  // last request cycles for each cache line
+    std::map<unsigned, unsigned>&
+        last_resp_cycles  // last response cycles for each cache line
 ) {
   uint64_t resp_cycle;
   if (instr.is_load) {
@@ -71,8 +72,8 @@ double get_thr_rob(const vector<Instr>& window, uint16_t rob_size) {
   vector<unsigned> finish(k);       // f_i
   vector<unsigned> commit(k);       // c_i
 
-  std::map<uint64_t, uint64_t> last_req_cycles;
-  std::map<uint64_t, uint64_t> last_resp_cycles;
+  std::map<unsigned, unsigned> last_req_cycles;
+  std::map<unsigned, unsigned> last_resp_cycles;
 
   for (unsigned i = 0; i < k; ++i) {
     const auto& instr = window[i];
@@ -100,7 +101,8 @@ double get_thr_rob(const vector<Instr>& window, uint16_t rob_size) {
     start_cycle[i] = max_dep_finish;
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
+    finish[i] =
+        resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Instructions must commit in order
@@ -146,8 +148,8 @@ double get_thr_load_queue(const vector<Instr>& window,
   vector<unsigned> finish(n_loads);       // f_i
   vector<unsigned> commit(n_loads);       // c_i
 
-  std::map<uint64_t, uint64_t> last_req_cycles;
-  std::map<uint64_t, uint64_t> last_resp_cycles;
+  std::map<unsigned, unsigned> last_req_cycles;
+  std::map<unsigned, unsigned> last_resp_cycles;
 
   for (int i = 0; i < (int)n_loads; ++i) {
     const auto& instr = *loads[i];
@@ -164,7 +166,8 @@ double get_thr_load_queue(const vector<Instr>& window,
     start_cycle[i] = arrival[i];
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
+    finish[i] =
+        resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Loads must commit in program order
@@ -207,8 +210,8 @@ double get_thr_store_queue(const vector<Instr>& window,
   vector<unsigned> finish(n_stores);       // f_i
   vector<unsigned> commit(n_stores);       // c_i
 
-  std::map<uint64_t, uint64_t> last_req_cycles;
-  std::map<uint64_t, uint64_t> last_resp_cycles;
+  std::map<unsigned, unsigned> last_req_cycles;
+  std::map<unsigned, unsigned> last_resp_cycles;
 
   for (int i = 0; i < (int)n_stores; ++i) {
     const auto& instr = *stores[i];
@@ -225,7 +228,8 @@ double get_thr_store_queue(const vector<Instr>& window,
     start_cycle[i] = arrival[i];
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
+    finish[i] =
+        resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Stores must commit in program order
@@ -349,11 +353,12 @@ double get_thr_ls_pipes_upper(const vector<Instr>& window,
 }
 
 // 9. I-Cache Fills Throughput
-double get_thr_icache_fills(const vector<Instr>& window, uint16_t max_icache_fills) {
+double get_thr_icache_fills(const vector<Instr>& window,
+                            uint16_t max_icache_fills) {
   if (window.empty()) {
     return 0.0;
   }
-  
+
   /* Stores the state related to in-flight requests. Keys are the
      cache lines, values are the cycles at which the requests
      complete. */
@@ -372,12 +377,13 @@ double get_thr_icache_fills(const vector<Instr>& window, uint16_t max_icache_fil
     if (it != in_flight_requests.end()) {
       /* Request for this instruction's cache line is already in flight. */
       uint64_t completion_cycle = it->second;
-      
-      /* Enforce in-order constraint: even if the cache line arrives, the instruction
-         isn't ready until the previous one is. */
+
+      /* Enforce in-order constraint: even if the cache line arrives, the
+         instruction isn't ready until the previous one is. */
       prev_inst_ready_cycle = std::max(prev_inst_ready_cycle, completion_cycle);
     } else {
-      /* We need to issue an icache request for this instruction's cache line. */
+      /* We need to issue an icache request for this instruction's cache line.
+       */
       uint64_t next_available_slot_cycle = prev_inst_ready_cycle;
 
       while (in_flight_requests.size() >= max_icache_fills) {
@@ -395,7 +401,8 @@ double get_thr_icache_fills(const vector<Instr>& window, uint16_t max_icache_fil
         in_flight_requests.erase(earliest_cache_line);
       }
 
-      uint64_t request_start_cycle = std::max(prev_inst_ready_cycle, next_available_slot_cycle);
+      uint64_t request_start_cycle =
+          std::max(prev_inst_ready_cycle, next_available_slot_cycle);
       uint64_t completion_cycle = request_start_cycle + fill_latency;
 
       in_flight_requests[cache_line] = completion_cycle;
@@ -410,7 +417,8 @@ double get_thr_icache_fills(const vector<Instr>& window, uint16_t max_icache_fil
     return static_cast<double>(total_instructions);
   }
 
-  return static_cast<double>(total_instructions) / static_cast<double>(total_cycles);
+  return static_cast<double>(total_instructions) /
+         static_cast<double>(total_cycles);
 }
 
 // 10. Fetch Buffers Throughput
