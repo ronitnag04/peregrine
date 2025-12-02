@@ -1,4 +1,4 @@
-CXX := g++-15
+CXX := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra
 INCLUDE := -I include -I src
 
