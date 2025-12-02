@@ -33,9 +33,9 @@ unsigned resp_cycle(
 ) {
   uint64_t resp_cycle;
   if (instr.is_load) {
-    /* Improve on the in-order cache simulation's memory model 
+    /* Improve on the in-order cache simulation's memory model
        for load instructions. */
-    assert(instr.read_address != 0); // load addresses must have a read address
+    assert(instr.read_address != 0);  // load addresses must have a read address
     uint64_t cache_line = instr.read_address / CACHE_LINE_SIZE;
     auto it = last_req_cycles.find(cache_line);
     if (it == last_req_cycles.end()) {
@@ -46,8 +46,9 @@ unsigned resp_cycle(
       last_resp_cycles[cache_line] = 0;
     }
     uint64_t prev_resp_cycle = last_resp_cycles[cache_line];
-    resp_cycle = std::max(static_cast<uint64_t>(req_cycle + instr.exe_latency), prev_resp_cycle);
-    
+    resp_cycle = std::max(static_cast<uint64_t>(req_cycle + instr.exe_latency),
+                          prev_resp_cycle);
+
     // update state variables
     last_resp_cycles[cache_line] = resp_cycle;
     last_req_cycles[cache_line] = req_cycle;
@@ -259,9 +260,12 @@ double get_thr_alu_issue(const vector<Instr>& window,
   // Handle edge case: no ALU instructions
   if (n_alu == 0) return window.size();
 
-  // throughput = k / (n_ALU / alu_issue_width)
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (alu_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_alu / alu_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
   return k / cycles_needed;
 }
 
@@ -276,9 +280,12 @@ double get_thr_fp_issue(const vector<Instr>& window, uint16_t fp_issue_width) {
   // Handle edge case: no FP instructions
   if (n_fp == 0) return window.size();
 
-  // throughput = k / (n_FP / fp_issue_width)
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (fp_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_fp / fp_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
   return k / cycles_needed;
 }
 
@@ -293,9 +300,12 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
   // Handle edge case: no Load/Store instructions
   if (n_ls == 0) return window.size();
 
-  // throughput = k / (n_LS / ls_issue_width)
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (ls_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_ls / ls_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
   return k / cycles_needed;
 }
 
@@ -441,7 +451,7 @@ double get_thr_fetch_buffers(const vector<Instr>& window,
           finishing_instr = pair.first;
         }
       }
-      buffer_state.erase(finishing_instr); 
+      buffer_state.erase(finishing_instr);
       final_cycle = earliest_finish_time + instr.fetch_latency;
     } else {
       final_cycle = instr.fetch_latency;
@@ -456,7 +466,8 @@ double get_thr_fetch_buffers(const vector<Instr>& window,
     return static_cast<double>(total_instructions);
   }
 
-  return static_cast<double>(total_instructions) / static_cast<double>(total_cycles);
+  return static_cast<double>(total_instructions) /
+         static_cast<double>(total_cycles);
 }
 
 // main entry
