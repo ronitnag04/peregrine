@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cstdio>
 
 #include "ext.h"
 #include "instr.h"
@@ -13,6 +14,9 @@
 namespace analytical {
 
 using std::vector;
+
+const uint64_t CACHE_LINE_SIZE = 64;
+const uint64_t LARGE_CONSTANT = 1000000000ULL;
 
 ////////////////////////////////////////////////////////////////////////////
 // Base calculations
@@ -297,65 +301,68 @@ double get_thr_ls_pipes_upper(const vector<Instr>& window,
 }
 
 // 9. I-Cache Fills Throughput
-double get_thr_icache_fills(const vector<Instr>& window,
-                            uint16_t max_icache_fills) {
-
-  /* Tracks in flight icache requests and their associated arrival times.
-     Size is bounded by max_icache_fills. */
+double get_thr_icache_fills(const vector<Instr>& window, uint16_t max_icache_fills) {
+  if (window.empty()) {
+    return 0.0;
+  }
+  
+  /* Stores the state related to in-flight requests. Keys are the
+     cache lines, values are the cycles at which the requests
+     complete. */
   std::map<uint64_t, uint64_t> in_flight_requests;
 
+  /* Cycle at which the previous instruction was issued. For this
+     simulation, we assume in-order issue. */
   uint64_t prev_inst_ready_cycle = 0;
-  uint64_t cache_line_size = 64;
 
   for (const auto& instr : window) {
-    uint64_t cache_line_addr = instr.IP / cache_line_size;
-    uint64_t fetch_latency = instr.mem_latency;
+    uint64_t cache_line = instr.IP / CACHE_LINE_SIZE;
+    uint64_t fill_latency = instr.mem_latency;
 
-    auto it = in_flight_requests.find(cache_line_addr);
+    auto it = in_flight_requests.find(cache_line);
 
     if (it != in_flight_requests.end()) {
-      // cache line is already in flight, so we check its arrival cycle
+      /* Request for this instruction's cache line is already in flight. */
       uint64_t completion_cycle = it->second;
-
-      /* in-order assumption means we take the max of the icache request completion
-         cycle and when the previous instruction is ready to choose the issue cycle
-         for the current instruction. */
-      prev_inst_ready_cycle = std::max(completion_cycle, prev_inst_ready_cycle);
+      
+      /* Enforce in-order constraint: even if the cache line arrives, the instruction
+         isn't ready until the previous one is. */
+      prev_inst_ready_cycle = std::max(prev_inst_ready_cycle, completion_cycle);
     } else {
-      // cache line is not already in flight, so a fill request is required
-      uint64_t next_request_slot_cycle = prev_inst_ready_cycle;
+      /* We need to issue an icache request for this instruction's cache line. */
+      uint64_t next_available_slot_cycle = prev_inst_ready_cycle;
+
       while (in_flight_requests.size() >= max_icache_fills) {
-        uint64_t earliest_finish_time = 1000000000ULL;
-        uint64_t earliest_addr = 0;
+        uint64_t earliest_finish_time = LARGE_CONSTANT;
+        uint64_t earliest_cache_line = 0;
 
         for (const auto& pair : in_flight_requests) {
           if (pair.second < earliest_finish_time) {
             earliest_finish_time = pair.second;
-            earliest_addr = pair.first;
+            earliest_cache_line = pair.first;
           }
         }
-        /* our next possible fill request slot is the earliest completion time
-           of an in-flight request */
-        next_request_slot_cycle = earliest_finish_time;
-        in_flight_requests.erase(earliest_addr);
+
+        next_available_slot_cycle = earliest_finish_time;
+        in_flight_requests.erase(earliest_cache_line);
       }
 
-      uint64_t request_start_cycle = std::max(prev_inst_ready_cycle, next_request_slot_cycle);
-      uint64_t request_completion_cycle = request_start_cycle + fetch_latency;
+      uint64_t request_start_cycle = std::max(prev_inst_ready_cycle, next_available_slot_cycle);
+      uint64_t completion_cycle = request_start_cycle + fill_latency;
 
-      in_flight_requests[cache_line_addr] = request_completion_cycle;
-      prev_inst_ready_cycle = request_completion_cycle;
+      in_flight_requests[cache_line] = completion_cycle;
+      prev_inst_ready_cycle = completion_cycle;
     }
   }
 
   uint64_t total_cycles = prev_inst_ready_cycle;
-  size_t total_instrs = window.size();
+  size_t total_instructions = window.size();
 
   if (total_cycles == 0) {
-    return static_cast<double>(total_instrs);
+    return static_cast<double>(total_instructions);
   }
 
-  return static_cast<double>(total_instrs) / static_cast<double>(total_cycles);
+  return static_cast<double>(total_instructions) / static_cast<double>(total_cycles);
 }
 
 // 10. Fetch Buffers Throughput
