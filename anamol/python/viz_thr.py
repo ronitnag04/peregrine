@@ -8,14 +8,11 @@ from pathlib import Path
 
 # --- Data Loading / Mocking Layer ---
 
-# We attempt to import the modules referenced in your script.
-# If they exist, we use them. If not, we generate mock data so the app runs.
 try:
     import utils
     import models
 
     # 1. Load data exactly as in your script
-    # Use the directory of this code file so default_output is ../output relative to the file
     script_dir = Path(__file__).resolve().parent
     default_output = (script_dir.parent / "output").resolve()
     output_dir = Path(os.environ.get("ANAMOL_OUTPUT_DIR", str(default_output)))
@@ -26,7 +23,6 @@ try:
     if not data:
         raise RuntimeError("No data found, switching to mock mode.")
 
-    # Helper to get param names safely using your models module
     def get_param_names(res_key):
         try:
             return models.get_resource_param_spec(res_key)
@@ -41,49 +37,46 @@ except (ImportError, RuntimeError) as e:
     data = {}
 
     # Mock 1: ROB (Reorder Buffer)
-    # Params: Size (32, 64, 128), Width (4, 8) -> 6 combinations
     rob_params = np.array([[32, 4], [32, 8], [64, 4], [64, 8], [128, 4], [128, 8]])
-    # Generate random throughput walks
-    rob_thr = np.abs(np.cumsum(np.random.randn(6, 50), axis=1) + 10)
+    rob_thr = np.abs(np.cumsum(np.random.randn(6, 100), axis=1) + 10)
     data["ROB (Mock)"] = (rob_params, rob_thr)
 
     # Mock 2: Store Queue
-    # Params: Entries (16 to 32) -> 17 combinations
     sq_params = np.arange(16, 33).reshape(-1, 1)
-    sq_thr = np.abs(np.cumsum(np.random.randn(len(sq_params), 50), axis=1) + 5)
+    sq_thr = np.abs(np.cumsum(np.random.randn(len(sq_params), 100), axis=1) + 5)
     data["Store Queue (Mock)"] = (sq_params, sq_thr)
+
+    # Mock 3: L1 Cache (Geometric progression example)
+    l1_params = np.array([2**i for i in range(10)]).reshape(-1, 1)  # 1, 2, 4... 512
+    l1_thr = np.abs(np.cumsum(np.random.randn(len(l1_params), 100), axis=1) + 20)
+    data["L1 Cache (Mock)"] = (l1_params, l1_thr)
 
     def get_param_names(res_key):
         if "ROB" in res_key:
             return ["ROB Size", "Issue Width"]
         elif "Store" in res_key:
             return ["Entries"]
+        elif "Cache" in res_key:
+            return ["Cache Size (KB)"]
         return None
 
 
-# --- Core Logic Adapted from visualize_thr.py ---
+# --- Core Logic ---
 
 
 def _find_best_index_for_params(params: np.ndarray, sel_vals):
-    """
-    Find index of the parameter combination matching sel_vals.
-    Exact match preferred, else nearest neighbor (L2).
-    """
+    """Find index of the parameter combination matching sel_vals."""
     sel = np.asarray(sel_vals).reshape(-1)
-
-    # Handle scalar param case (N, 1)
     if params.shape[1] == 1:
         sel = sel.reshape(1)
         mask = params[:, 0] == sel[0]
     else:
-        # Handle multi-dim param case (N, M)
-        # Check if all columns match
         mask = np.all(params == sel, axis=1)
 
     if np.any(mask):
         return int(np.where(mask)[0][0])
 
-    # Fallback: Nearest Neighbor (L2 distance)
+    # Fallback: Nearest Neighbor
     diffs = params.astype(float) - sel.astype(float)
     d2 = np.sum(diffs * diffs, axis=1)
     return int(np.argmin(d2))
@@ -96,18 +89,17 @@ app = dash.Dash(
 )
 app.title = "Throughput Visualizer"
 
-# Prepare Dropdown Options
-resource_options = [{"label": k, "value": k} for k in sorted(data.keys())]
-default_resource = resource_options[0]["value"] if resource_options else None
+resource_keys = sorted(data.keys())
+# Default to the first resource if available
+default_val = [resource_keys[0]] if resource_keys else []
 
 app.layout = html.Div(
     [
-        # Header
         html.Div(
             [
                 html.H2("Resource Throughput Explorer", style={"marginBottom": "10px"}),
                 html.P(
-                    "Select a resource and adjust parameters to compare throughput traces.",
+                    "Select multiple resources to compare. Adjust parameters for each below.",
                     style={"color": "#666"},
                 ),
             ],
@@ -120,41 +112,29 @@ app.layout = html.Div(
                 html.Div(
                     [
                         html.Label(
-                            "Select Resource:",
+                            "Select Resources (Multi-select):",
                             style={"fontWeight": "bold", "fontSize": "1.1em"},
                         ),
                         dcc.Dropdown(
                             id="resource-dropdown",
-                            options=resource_options,
-                            value=default_resource,
-                            clearable=False,
-                            style={"marginBottom": "30px"},
+                            options=[{"label": k, "value": k} for k in resource_keys],
+                            value=default_val,
+                            multi=True,  # ENABLED MULTI-SELECT
+                            placeholder="Select resources...",
+                            style={"marginBottom": "20px"},
                         ),
-                        html.Div(
-                            html.Label(
-                                "Parameters:",
-                                style={"fontWeight": "bold", "fontSize": "1.1em"},
-                            )
-                        ),
-                        # This container will be populated dynamically by the callback
-                        html.Div(
-                            id="controls-container",
-                            style={
-                                "backgroundColor": "#f8f9fa",
-                                "padding": "20px",
-                                "borderRadius": "8px",
-                                "border": "1px solid #ddd",
-                            },
-                        ),
+                        # Dynamic controls container
+                        html.Div(id="controls-container"),
                     ],
                     className="four columns",
+                    style={"maxHeight": "80vh", "overflowY": "auto"},
                 ),
                 # Right Column: Graph
                 html.Div(
                     [
                         dcc.Graph(
                             id="throughput-graph",
-                            style={"height": "70vh"},
+                            style={"height": "75vh"},
                             config={"displayModeBar": True},
                         )
                     ],
@@ -174,158 +154,258 @@ app.layout = html.Div(
 @app.callback(
     Output("controls-container", "children"), Input("resource-dropdown", "value")
 )
-def update_controls(res_key):
+def update_controls(selected_resources):
     """
-    Creates sliders or dropdowns dynamically based on the number and range
-    of parameters for the selected resource.
+    Generates a control card for EACH selected resource.
+    Uses 'Index Mapping' for sliders to prevent crowding.
     """
-    if not res_key or res_key not in data:
-        return html.Div("No data available.")
+    if not selected_resources:
+        return html.Div(
+            "Please select a resource.", style={"color": "#888", "fontStyle": "italic"}
+        )
 
-    params, _ = data[res_key]
-    params = np.atleast_2d(params)
+    # Ensure it's a list (Dropdown can return string if multi=False, but we set multi=True)
+    if not isinstance(selected_resources, list):
+        selected_resources = [selected_resources]
 
-    # Retrieve parameter names (e.g., "Size", "Width")
-    param_names = get_param_names(res_key)
-    # Fallback names if none provided
-    if not param_names or len(param_names) != params.shape[1]:
-        param_names = [f"Param {i}" for i in range(params.shape[1])]
+    all_controls = []
 
-    controls = []
+    for res_key in selected_resources:
+        if res_key not in data:
+            continue
 
-    # Iterate over each parameter column to create a widget
-    for col_idx, name in enumerate(param_names):
-        col_vals = params[:, col_idx].astype(int)
-        unique_vals = np.unique(col_vals)
-        unique_vals_list = sorted(list(unique_vals))
+        params, _ = data[res_key]
+        params = np.atleast_2d(params)
 
-        # We assign a Pattern Matching ID to the input
-        # 'index': col_idx ensures we can reconstruct the order later
-        control_id = {"type": "param-control", "index": col_idx}
+        param_names = get_param_names(res_key)
+        if not param_names or len(param_names) != params.shape[1]:
+            param_names = [f"Param {i}" for i in range(params.shape[1])]
 
-        label = html.Label(f"{name}", style={"fontWeight": "bold", "marginTop": "15px"})
+        # Card for this resource
+        card_content = [
+            html.H5(
+                res_key,
+                style={
+                    "borderBottom": "1px solid #ccc",
+                    "paddingBottom": "5px",
+                    "marginTop": "0",
+                },
+            ),
+        ]
 
-        # Logic from visualize_thr.py: Choose widget based on cardinality
-        if len(unique_vals) <= 12:
-            # Small set: Discrete Slider
-            # map values to string labels
-            marks = {int(v): str(v) for v in unique_vals}
-            widget = dcc.Slider(
-                id=control_id,
-                min=min(unique_vals_list),
-                max=max(unique_vals_list),
-                step=None,  # Snaps to marks only
-                marks=marks,
-                value=unique_vals_list[0],
+        for col_idx, name in enumerate(param_names):
+            col_vals = params[:, col_idx].astype(int)
+            unique_vals = sorted(list(np.unique(col_vals)))
+
+            # --- IMPROVED SLIDER LOGIC ---
+            # Instead of using value=actual_value, we use value=index.
+            # This ensures even spacing regardless of whether values are [1,2,3] or [1, 2, 4, 8, 16...]
+
+            # Create readable marks
+            # If too many values, sparse the labels to avoid text overlap
+            count = len(unique_vals)
+            step_size = 1
+            if count > 10:
+                step_size = count // 5  # Show roughly 5-6 labels max
+
+            marks = {}
+            for i, val in enumerate(unique_vals):
+                if i % step_size == 0 or i == count - 1:
+                    marks[i] = str(val)
+
+            # Store the *Mapping* in a custom data attribute or just rely on index reconstruction in the graph callback.
+            # We will rely on reconstruction.
+
+            control_id = {
+                "type": "param-control",
+                "resource": res_key,
+                "index": col_idx,
+            }
+
+            label = html.Label(
+                f"{name}:",
+                style={"fontWeight": "bold", "fontSize": "0.9em", "marginTop": "10px"},
             )
-        elif len(unique_vals) <= 50:
-            # Medium set: Dropdown
-            widget = dcc.Dropdown(
+
+            slider = dcc.Slider(
                 id=control_id,
-                options=[{"label": str(v), "value": int(v)} for v in unique_vals_list],
-                value=unique_vals_list[0],
-                clearable=False,
-            )
-        else:
-            # Large set: Numeric Slider (continuous-ish)
-            widget = dcc.Slider(
-                id=control_id,
-                min=min(unique_vals_list),
-                max=max(unique_vals_list),
+                min=0,
+                max=len(unique_vals) - 1,
                 step=1,
-                value=unique_vals_list[0],
-                tooltip={"placement": "bottom", "always_visible": True},
+                value=0,  # Default to first index
+                marks=marks,
+                # Store the actual values in the component so we can read them client-side if needed,
+                # but mostly useful for the user to see the tooltip.
+                tooltip={"placement": "bottom", "always_visible": False},
             )
 
-        controls.append(html.Div([label, widget]))
+            card_content.append(html.Div([label, slider]))
 
-    return controls
+        card = html.Div(
+            card_content,
+            style={
+                "backgroundColor": "white",
+                "padding": "15px",
+                "marginBottom": "15px",
+                "borderRadius": "5px",
+                "boxShadow": "0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24)",
+            },
+        )
+        all_controls.append(card)
+
+    return all_controls
 
 
 @app.callback(
     Output("throughput-graph", "figure"),
     [
-        Input({"type": "param-control", "index": ALL}, "value"),
         Input("resource-dropdown", "value"),
+        Input({"type": "param-control", "resource": ALL, "index": ALL}, "value"),
     ],
+    [State({"type": "param-control", "resource": ALL, "index": ALL}, "id")],
 )
-def update_graph(param_values, res_key):
+def update_graph(selected_resources, param_indices, param_ids):
     """
-    Redraws the graph.
-    Inputs:
-       param_values: List of values from all dynamic sliders.
-       res_key: Selected resource name.
+    Reconstructs the parameters from the slider indices and plots the lines.
+    param_indices: list of integer values (0..N) from sliders
+    param_ids: list of dicts identifying which slider sent which value
     """
-    if not res_key or res_key not in data:
-        return go.Figure()
-
-    params, thr = data[res_key]
-    params = np.atleast_2d(params)
-    num_combos, num_windows = thr.shape
-    x_axis = np.arange(num_windows)
-
-    # 1. Determine which combo is selected
-    # Note: param_values list order corresponds to the creation order (params columns)
-
-    # Guard against partial updates (e.g. while controls are being built)
-    if not param_values or len(param_values) != params.shape[1]:
-        # Default to index 0 if inputs aren't ready
-        best_idx = 0
-    else:
-        best_idx = _find_best_index_for_params(params, param_values)
-
-    # 2. Build the Figure
     fig = go.Figure()
 
-    # A. Add Faint Context Traces (Gray Lines)
-    # Performance check: If > 500 traces, sample them to keep the browser responsive
-    indices_to_plot = range(num_combos)
-    if num_combos > 500:
-        indices_to_plot = np.linspace(0, num_combos - 1, 500, dtype=int)
+    if not selected_resources:
+        fig.update_layout(
+            template="plotly_white",
+            xaxis_title="Window ID",
+            yaxis_title="Throughput",
+            annotations=[
+                dict(
+                    text="Select a resource to begin",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                )
+            ],
+        )
+        return fig
 
-    for i in indices_to_plot:
+    if not isinstance(selected_resources, list):
+        selected_resources = [selected_resources]
+
+    # Map the flat list of inputs back to structured data: {resource_key: {col_idx: slider_index_value}}
+    # This allows us to handle multiple resources correctly.
+    current_settings = {}
+
+    if param_ids and param_indices:
+        for val, id_dict in zip(param_indices, param_ids):
+            res = id_dict["resource"]
+            idx = id_dict["index"]
+            if res not in current_settings:
+                current_settings[res] = {}
+            current_settings[res][idx] = val
+
+    # Color palette cycle for different resources
+    colors = [
+        "#EF553B",
+        "#636EFA",
+        "#00CC96",
+        "#AB63FA",
+        "#FFA15A",
+        "#19D3F3",
+        "#FF6692",
+        "#B6E880",
+    ]
+
+    for i, res_key in enumerate(selected_resources):
+        if res_key not in data:
+            continue
+
+        params, thr = data[res_key]
+        params = np.atleast_2d(params)
+        num_combos, num_windows = thr.shape
+        x_axis = np.arange(num_windows)
+
+        # Determine Color for this resource
+        color = colors[i % len(colors)]
+
+        # --- RECONSTRUCT SELECTED PARAMETER VALUES ---
+        # 1. Get the indices selected by the sliders
+        selected_indices = []
+        param_names = get_param_names(res_key)
+        if not param_names:
+            param_names = [f"p{k}" for k in range(params.shape[1])]
+
+        slider_vals_for_res = current_settings.get(res_key, {})
+
+        # If we are just initializing (sliders might not be created yet), default to index 0 for all
+        actual_param_vals = []
+
+        for col_idx in range(params.shape[1]):
+            col_data = params[:, col_idx].astype(int)
+            unique_options = sorted(list(np.unique(col_data)))
+
+            # Get slider index (default 0)
+            slider_idx = slider_vals_for_res.get(col_idx, 0)
+
+            # Safety clamp
+            if slider_idx >= len(unique_options):
+                slider_idx = len(unique_options) - 1
+
+            # Map index -> Real Value
+            val = unique_options[slider_idx]
+            actual_param_vals.append(val)
+
+        # Find the row in params that matches these values
+        best_idx = _find_best_index_for_params(params, actual_param_vals)
+
+        # --- PLOTTING ---
+
+        # Context Traces (Gray):
+        # Only show context if SINGLE resource selected (to avoid mess).
+        # If multiple resources, only show the highlighted lines.
+        if len(selected_resources) == 1:
+            indices_to_plot = range(num_combos)
+            if num_combos > 200:
+                indices_to_plot = np.linspace(0, num_combos - 1, 200, dtype=int)
+
+            for ctx_i in indices_to_plot:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_axis,
+                        y=thr[ctx_i],
+                        mode="lines",  # CHANGED: No markers
+                        line=dict(color="lightgray", width=1),
+                        opacity=0.2,
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+
+        # Main Trace
+        # Generate label
+        label_parts = [f"{n}={v}" for n, v in zip(param_names, actual_param_vals)]
+        label = f"{res_key} ({', '.join(label_parts)})"
+
         fig.add_trace(
             go.Scatter(
                 x=x_axis,
-                y=thr[i],
+                y=thr[best_idx],
+                # CHANGED: 'lines' only prevents crowding. Markers show on hover inherently or we can force them on hover if needed.
                 mode="lines",
-                line=dict(color="lightgray", width=1),
-                opacity=0.3,
-                hoverinfo="skip",  # Disable hover for background lines for performance
-                showlegend=False,
+                line=dict(color=color, width=2.5),
+                name=label,
+                showlegend=True,
             )
         )
 
-    # B. Add Highlighted Trace (Crimson Line)
-    selected_y = thr[best_idx]
-
-    # Generate title string
-    param_names = get_param_names(res_key)
-    if not param_names:
-        param_names = [f"p{i}" for i in range(params.shape[1])]
-
-    # Get actual values of the selected combo
-    actual_vals = params[best_idx]
-    title_parts = [f"{n}={v}" for n, v in zip(param_names, actual_vals)]
-    title_str = f"<b>{res_key}</b><br>Combo {best_idx}: ({', '.join(title_parts)})"
-
-    fig.add_trace(
-        go.Scatter(
-            x=x_axis,
-            y=selected_y,
-            mode="lines+markers",
-            line=dict(color="crimson", width=3),
-            name="Selected",
-            showlegend=True,
-        )
-    )
-
     fig.update_layout(
-        title=title_str,
+        title="Throughput Comparison",
         xaxis_title="Window ID",
         yaxis_title="Throughput",
         template="plotly_white",
-        hovermode="x unified",
+        hovermode="x unified",  # Helps compare multiple lines at same X
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=40, r=40, t=80, b=40),
     )
 
