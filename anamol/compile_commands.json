@@ -15,9 +15,9 @@
       "build/obj/main.o",
       "src/main.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/main.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/main.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/src/main.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/main.o"
   },
   {
     "arguments": [
@@ -35,9 +35,9 @@
       "build/obj/parser.o",
       "src/parser.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/parser.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/parser.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/src/parser.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/parser.o"
   },
   {
     "arguments": [
@@ -55,29 +55,9 @@
       "build/obj/models.o",
       "src/models.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/models.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/models.o"
-  },
-  {
-    "arguments": [
-      "/opt/homebrew/opt/llvm/bin/clang++",
-      "-std=c++20",
-      "-Wall",
-      "-Wextra",
-      "-I",
-      "include",
-      "-I",
-      "src",
-      "-fopenmp",
-      "-c",
-      "-o",
-      "build/obj/ext.o",
-      "src/ext.cpp"
-    ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/ext.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/ext.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/src/models.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/models.o"
   },
   {
     "arguments": [
@@ -95,9 +75,9 @@
       "build/obj/tests/test_params.o",
       "tests/test_params.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/tests/test_params.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/tests/test_params.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/tests/test_params.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/tests/test_params.o"
   },
   {
     "arguments": [
@@ -115,9 +95,9 @@
       "build/obj/tests/test_models.o",
       "tests/test_models.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/tests/test_models.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/tests/test_models.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/tests/test_models.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/tests/test_models.o"
   },
   {
     "arguments": [
@@ -134,28 +114,9 @@
       "build/obj/serial_models.o",
       "src/models.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/models.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/serial_models.o"
-  },
-  {
-    "arguments": [
-      "/opt/homebrew/opt/llvm/bin/clang++",
-      "-std=c++20",
-      "-Wall",
-      "-Wextra",
-      "-I",
-      "include",
-      "-I",
-      "src",
-      "-c",
-      "-o",
-      "build/obj/serial_ext.o",
-      "src/ext.cpp"
-    ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/ext.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/serial_ext.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/src/models.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/serial_models.o"
   },
   {
     "arguments": [
@@ -174,8 +135,8 @@
       "build/obj/standalone_parser.o",
       "src/parser.cpp"
     ],
-    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical",
-    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/src/parser.cpp",
-    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/analytical/build/obj/standalone_parser.o"
+    "directory": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol",
+    "file": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/src/parser.cpp",
+    "output": "/Users/u5er/Library/Mobile Documents/com~apple~CloudDocs/Education/Terms/2025-4 Fall/CS 294-262/project/peregrine/anamol/build/obj/standalone_parser.o"
   }
 ]
