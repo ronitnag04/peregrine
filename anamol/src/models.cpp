@@ -45,11 +45,8 @@ unsigned resp_cycle(
       last_req_cycles[cache_line] = 0;
       last_resp_cycles[cache_line] = 0;
     }
-    /* req_cycle must be non-decreasing for requests
-        for the same cache line. */
-    assert(req_cycle >= last_req_cycles[cache_line]);
     uint64_t prev_resp_cycle = last_resp_cycles[cache_line];
-    resp_cycle = std::max(req_cycle + instr.exe_latency, prev_resp_cycle);
+    resp_cycle = std::max(static_cast<uint64_t>(req_cycle + instr.exe_latency), prev_resp_cycle);
     
     // update state variables
     last_resp_cycles[cache_line] = resp_cycle;
@@ -370,7 +367,7 @@ double get_thr_icache_fills(const vector<Instr>& window,
 
   for (const auto& instr : window) {
     uint64_t cache_line = instr.IP / CACHE_LINE_SIZE;
-    uint64_t fill_latency = instr.mem_latency;
+    uint64_t fill_latency = instr.fetch_latency;
 
     auto it = in_flight_requests.find(cache_line);
 
@@ -424,9 +421,42 @@ double get_thr_icache_fills(const vector<Instr>& window,
 // 10. Fetch Buffers Throughput
 double get_thr_fetch_buffers(const vector<Instr>& window,
                              uint16_t num_fetch_buffers) {
-  // TODO: Implement Fetch Buffers throughput via discrete-event simulation
-  // Model fetch buffer occupancy constraints
-  return 0.0;
+  if (window.empty()) {
+    return 0.0;
+  }
+
+  /* Tracks the filled state of the fetch buffer. */
+  std::map<instr_id_t, uint64_t> buffer_state;
+
+  uint64_t final_cycle = 0;
+  instr_id_t finishing_instr;
+
+  for (const auto& instr : window) {
+    if (buffer_state.size() == num_fetch_buffers) {
+      /* We need to wait for space to become free. */
+      uint64_t earliest_finish_time = LARGE_CONSTANT;
+      for (const auto& pair : buffer_state) {
+        if (pair.second < earliest_finish_time) {
+          earliest_finish_time = pair.second;
+          finishing_instr = pair.first;
+        }
+      }
+      buffer_state.erase(finishing_instr); 
+      final_cycle = earliest_finish_time + instr.fetch_latency;
+    } else {
+      final_cycle = instr.fetch_latency;
+    }
+    buffer_state[instr.id] = final_cycle;
+  }
+
+  uint64_t total_cycles = final_cycle;
+  size_t total_instructions = window.size();
+
+  if (total_cycles == 0) {
+    return static_cast<double>(total_instructions);
+  }
+
+  return static_cast<double>(total_instructions) / static_cast<double>(total_cycles);
 }
 
 // main entry

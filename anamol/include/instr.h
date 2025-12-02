@@ -45,7 +45,7 @@ struct Instr {
   uint64_t IP;
   instr_id_t id;
   latency_t exe_latency;
-  latency_t mem_latency;
+  latency_t fetch_latency;
 
   bool is_alu;
   bool is_fp;
@@ -55,6 +55,8 @@ struct Instr {
   bool is_branch;
 
   branch_t branch_type;
+  bool branch_taken;
+  uint64_t branch_target_addr;
   std::vector<uint32_t> deps;
   uint64_t read_address;
 };

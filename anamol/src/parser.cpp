@@ -93,7 +93,7 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
     while (
       in.read_row(
         ip_str, assembly, category, opcode,
-        branch_type, branch_taken, branch_target_addr
+        branch_type, branch_taken, branch_target_addr,
         inst_sync_str, read_regs_str, write_regs_str,
         reg_deps_str, read_addrs_str, write_addrs_str,
         mem_deps_str, fetch_latency_str, exec_latency_str
@@ -118,13 +118,13 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
       inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
 
       if (fetch_latency_str.empty()) {
-        throw std::runtime_error(std::format("Missing fetch latency at row: {}", row));
+        throw std::runtime_error("Missing fetch latency at row: {}" + std::to_string(row));
       }
-      
+
       inst.fetch_latency = std::stoul(fetch_latency_str);
 
       if (exec_latency_str.empty()) {
-        throw std::runtime_error(std::format("Missing execution latency at row {}", row));
+        throw std::runtime_error("Missing execution latency at row {}" + std::to_string(row));
       }
       
       inst.exe_latency = std::stoul(exec_latency_str);
@@ -144,7 +144,7 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
   result.IP = inst.ip;
   result.id = id;
   result.exe_latency = inst.exe_latency;
-  result.mem_latency = inst.mem_latency;
+  result.fetch_latency = inst.fetch_latency;
 
   // Determine instruction type
   result.is_alu = (inst.category == "BINARY" || inst.category == "LOGICAL" ||
@@ -177,6 +177,9 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
     } else {
       result.branch_type = branch_t::DIRECT_UNCOND;
     }
+
+    result.branch_taken = inst.branch_taken;
+    result.branch_target_addr = inst.branch_target_addr;
   }
 
   return result;
