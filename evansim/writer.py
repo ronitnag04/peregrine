@@ -30,7 +30,9 @@ class Writer:
             "Read Addresses",
             "Write Addresses",
             "Memory Dependent IPs",
-            "Latency"  # The new column
+            # New columns
+            "Fetch Latency",
+            "Execution Latency"
         ]
 
     def write(self, instructions: List[Instruction]) -> None:
@@ -59,7 +61,8 @@ class Writer:
                         "Read Addresses": self._format_hex_list(inst.read_addrs),
                         "Write Addresses": self._format_hex_list(inst.write_addrs),
                         "Memory Dependent IPs": self._format_hex_list(inst.mem_dependent_ips),
-                        "Latency": inst.latency
+                        "Fetch Latency": inst.fetch_latency,
+                        "Execution Latency": inst.exec_latency
                     }
                     writer.writerow(row)
             

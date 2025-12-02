@@ -22,9 +22,10 @@ class Sim:
     def run(self):
         for instruction in self.trace:
             try:
-                latency = instruction.estimate_latency(self.icache, self.dcache)
-            except Exception as e:
+                fetch_latency, exec_latency = instruction.estimate_latency(self.icache, self.dcache)
+            except Exception:
                 print(instruction)
                 raise
                 
-            instruction.latency = latency
+            instruction.fetch_latency = fetch_latency
+            instruction.exec_latency = exec_latency

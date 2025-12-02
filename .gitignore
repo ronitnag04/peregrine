@@ -12,5 +12,8 @@ wheels/
 # Traces
 *.csv
 
+# Executables
+*.o
+
 # System
 .DS_Store

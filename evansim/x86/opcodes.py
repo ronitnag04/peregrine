@@ -23,7 +23,7 @@ class Opcode(Enum):
     CMOVNS  = { 'reg_reg': 1, 'mem_reg': 4 }
     CMOVBE  = { 'reg_reg': 1, 'mem_reg': 4 }
     CMOVNBE = { 'reg_reg': 1, 'mem_reg': 4 }
-    XCHG    = { 'reg_reg': 2, 'reg_mem': 19 } 
+    XCHG    = { 'reg_reg': 2, 'mem_reg': 19, 'reg_mem': 19 } 
     BSWAP   = { 'reg_reg': 1 } 
     MOVBE   = { 'mem_reg': 2, 'reg_mem': 3 } 
     MOVNTI  = { 'reg_mem': 400 } 
@@ -68,8 +68,8 @@ class Opcode(Enum):
     ROL     = { 'reg_reg': 1 }
     RCR     = { 'reg_reg': 2, 'mem_reg': 6 }
     RCL     = { 'reg_reg': 2, 'mem_reg': 7 }
-    SHRD    = { 'reg_reg': 3 }
-    SHLD    = { 'reg_reg': 3 }
+    SHRD    = { 'reg_reg': 3, 'reg_mem': 3 }
+    SHLD    = { 'reg_reg': 3, 'reg_mem': 3 }
     SHLX    = { 'reg_reg': 1, 'mem_reg': 5 }
     SHRX    = { 'reg_reg': 1, 'mem_reg': 5 }
     SARX    = { 'reg_reg': 1, 'mem_reg': 5 }
@@ -81,16 +81,16 @@ class Opcode(Enum):
     BTC     = { 'reg_reg': 1, 'reg_mem': 5 }
     BSF     = { 'reg_reg': 3, 'mem_reg': 7 }
     BSR     = { 'reg_reg': 3, 'mem_reg': 7 }
-    LZCNT   = { 'reg_reg': 3 }
-    TZCNT   = { 'reg_reg': 3 }
-    POPCNT  = { 'reg_reg': 3 } 
+    LZCNT   = { 'reg_reg': 3, 'reg_mem': 3 }
+    TZCNT   = { 'reg_reg': 3, 'reg_mem': 3 }
+    POPCNT  = { 'reg_reg': 3, 'reg_mem': 3 } 
     BLSI    = { 'reg_reg': 1 }
     BLSMSK  = { 'reg_reg': 1 }
     BLSR    = { 'reg_reg': 1 }
     BEXTR   = { 'reg_reg': 2, 'mem_reg': 6 }
     BZHI    = { 'reg_reg': 1 }
-    PDEP    = { 'reg_reg': 3 }
-    PEXT    = { 'reg_reg': 3 }
+    PDEP    = { 'reg_reg': 3, 'reg_mem': 3 }
+    PEXT    = { 'reg_reg': 3, 'reg_mem': 3 }
     ANDN    = { 'reg_reg': 1 }
 
     # --- Flags & System ---
@@ -108,9 +108,9 @@ class Opcode(Enum):
     # --- Control Transfer ---
     JMP       = { 'reg_reg': 2, 'mem_reg': 2 }
     CALL      = { 'reg_reg': 3, 'mem_reg': 4 } 
-    CALL_NEAR = { 'reg_reg': 2, 'mem_reg': 4 } 
-    RET       = { 'reg_reg': 2, 'reg_mem': 2 }
-    RET_NEAR  = { 'reg_reg': 2, 'reg_mem': 2 }
+    CALL_NEAR = { 'reg_reg': 2, 'mem_reg': 4, 'reg_mem': 2 } 
+    RET       = { 'reg_reg': 2, 'mem_reg': 2, 'reg_mem': 2 }
+    RET_NEAR  = { 'reg_reg': 2, 'mem_reg': 2, 'reg_mem': 2 }
     LOOP      = { 'reg_reg': 7 }
     JZ        = { 'reg_reg': 1 }
     JE        = { 'reg_reg': 1 }
@@ -134,9 +134,9 @@ class Opcode(Enum):
     JRCXZ     = { 'reg_reg': 2 } 
 
     # --- Strings (Scalar) ---
-    LODS    = { 'reg_reg': 3 } 
-    STOS    = { 'reg_reg': 3 }
-    STOSQ   = { 'reg_reg': 3 }
+    LODS    = { 'reg_reg': 3, 'reg_mem': 3 } 
+    STOS    = { 'reg_reg': 3, 'reg_mem': 3 }
+    STOSQ   = { 'reg_reg': 3, 'reg_mem': 3 }
     MOVS    = { 'reg_reg': 5 } 
     SCAS    = { 'reg_reg': 3 } 
     CMPS    = { 'reg_reg': 5 } 
@@ -146,11 +146,12 @@ class Opcode(Enum):
     CMPXCHG       = { 'reg_mem': 7 }
     LOCK_XADD     = { 'reg_mem': 21 }
     LOCK_ADD      = { 'reg_mem': 21 }
-    CMPXCHG_LOCK  = { 'reg_mem': 22 }
+    CMPXCHG_LOCK  = { 'mem_reg': 22 }
     LFENCE        = { 'reg_reg': 5 } 
     MFENCE        = { 'reg_reg': 36 } 
     SFENCE        = { 'reg_reg': 6 } 
     PAUSE         = { 'reg_reg': 138 } 
+    LEAVE         = { 'mem_reg': 4 }
 
     # --- Conversion (Scalar) ---
     CBW     = { 'reg_reg': 1 }
@@ -440,6 +441,7 @@ class Opcode(Enum):
     # --- Other ---
     VZEROUPPER  = { 'reg_reg': 1 }
     XRSTOR      = { 'mem_reg': 80 }
+    XSAVE       = { 'mem_reg': 137 }
     XSAVEC      = { 'reg_mem': 84 }
     
     def reg_reg_latency(self):

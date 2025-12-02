@@ -37,36 +37,39 @@ class Instruction:
         self.write_addrs: list[np.uint64] = write_addrs
         self.mem_dependent_ips: list[np.uint64] = mem_dependent_ips
         
-        self.latency: int = 0 # default value, filled in by in-order simulation
+        # default values, filled in by in-order simulation
+        self.fetch_latency: int = 0
+        self.exec_latency: int = 0
     
     def is_load(self):
         return self.read_addrs != []
     
     def estimate_latency(self, icache: Cache, dcache: Cache):
         # first add instruction fetch latency based on icache simulation
-        latency = icache.read(self.inst_ptr)
+        fetch_latency = icache.read(self.inst_ptr)
+        exec_latency = 0
         
         
         # next add op latency (does not include memory latency)
         if len(self.read_addrs) > 0:
-            latency += self.opcode.mem_reg_latency()
+            exec_latency += self.opcode.mem_reg_latency()
         elif len(self.write_addrs) > 0:
-            latency += self.opcode.reg_mem_latency()
+            exec_latency += self.opcode.reg_mem_latency()
         else:
-            latency += self.opcode.reg_reg_latency()
+            exec_latency += self.opcode.reg_reg_latency()
         
         
         # then add memory latency based on dcache simulation
         if len(self.read_addrs) > 0:
             # if read addresses is not empty, there must be a load
-            latency += dcache.read(self.read_addrs[0]) 
+            exec_latency += dcache.read(self.read_addrs[0]) 
         
         if len(self.write_addrs) > 0:
             # must be a mem-to-reg (load) operation
             # invoke cache model
-            latency += dcache.write(self.write_addrs[0])
+            exec_latency += dcache.write(self.write_addrs[0])
             
-        return latency
+        return fetch_latency, exec_latency
     
     def __repr__(self):
             """Helper for printing the object nicely."""
