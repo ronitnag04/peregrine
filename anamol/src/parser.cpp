@@ -246,6 +246,13 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
 
   result.is_load = !inst.read_addresses.empty();
   result.is_store = !inst.write_addresses.empty();
+  
+  // if the instruction was a load, store its read address
+  if (result.is_load) {
+    result.read_address = inst.read_addresses.front().addr;
+  } else {
+    result.read_address = 0;
+  }
 
   result.is_isb = inst.inst_sync;
 

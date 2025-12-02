@@ -5,12 +5,21 @@
 #include <cstdint>
 #include <functional>
 #include <vector>
+#include <map>
 
 #include "instr.h"
 #include "params.h"
 #include "resources.h"
 
 namespace analytical {
+
+// resp_cycle from Algorithm 1
+uint64_t resp_cycle(
+    uint64_t req_cycle,
+    Instr instr,
+    std::map<uint64_t, uint64_t> last_req_cycles,
+    std::map<uint64_t, uint64_t> last_resp_cycles
+);
 
 ////////////////////////////////////////////////////////////////////////////
 // Base Throughput Calculations

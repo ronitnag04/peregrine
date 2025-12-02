@@ -54,6 +54,7 @@ struct Instr {
 
   branch_t branch_type;
   std::vector<uint32_t> deps;
+  uint64_t read_address;
 };
 
 }  // namespace analytical

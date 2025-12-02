@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <cstdio>
+#include <cassert>
 
 #include "ext.h"
 #include "instr.h"
@@ -22,6 +23,44 @@ const uint64_t LARGE_CONSTANT = 1000000000ULL;
 // Base calculations
 ////////////////////////////////////////////////////////////////////////////
 
+/* Implements Algorithm 1 from the paper. */
+uint64_t resp_cycle(
+  uint64_t req_cycle,                           // request cycle for the instruction
+  Instr& instr,                                  // instruction
+  std::map<uint64_t, uint64_t>& last_req_cycles, // last request cycles for each cache line
+  std::map<uint64_t, uint64_t>& last_resp_cycles // last response cycles for each cache line
+) {
+  uint64_t resp_cycle;
+  if (instr.is_load) {
+    /* Improve on the in-order cache simulation's memory model 
+       for load instructions. */
+    assert(instr.read_address != 0); // load addresses must have a read address
+    uint64_t cache_line = instr.read_address / CACHE_LINE_SIZE;
+    auto it = last_req_cycles.find(cache_line);
+    if (it == last_req_cycles.end()) {
+      /* If there isn't already an entry for the cache line,
+         we need to make a request, so set entries for the
+         cache line in all state variables. */
+      last_req_cycles[cache_line] = 0;
+      last_resp_cycles[cache_line] = 0;
+    }
+    /* req_cycle must be non-decreasing for requests
+        for the same cache line. */
+    assert(req_cycle >= last_req_cycles[cache_line]);
+    uint64_t prev_resp_cycle = last_resp_cycles[cache_line];
+    resp_cycle = std::max(req_cycle + instr.exe_latency, prev_resp_cycle);
+    
+    // update state variables
+    last_resp_cycles[cache_line] = resp_cycle;
+    last_req_cycles[cache_line] = req_cycle;
+  } else {
+    /* Constant latency for non-load instructions. */
+    resp_cycle = instr.exe_latency + req_cycle;
+  }
+
+  return resp_cycle;
+}
+
 // 1. ROB (Reorder Buffer) Throughput
 double get_thr_rob(const vector<Instr>& window, uint16_t rob_size) {
   instr_id_t k = window.size();
@@ -31,6 +70,9 @@ double get_thr_rob(const vector<Instr>& window, uint16_t rob_size) {
   vector<unsigned> start_cycle(k);  // s_i
   vector<unsigned> finish(k);       // f_i
   vector<unsigned> commit(k);       // c_i
+
+  std::map<uint64_t, uint64_t> last_req_cycles;
+  std::map<uint64_t, uint64_t> last_resp_cycles;
 
   for (unsigned i = 0; i < k; ++i) {
     const auto& instr = window[i];
@@ -58,7 +100,7 @@ double get_thr_rob(const vector<Instr>& window, uint16_t rob_size) {
     start_cycle[i] = max_dep_finish;
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr.IP);
+    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Instructions must commit in order
@@ -104,6 +146,9 @@ double get_thr_load_queue(const vector<Instr>& window,
   vector<unsigned> finish(n_loads);       // f_i
   vector<unsigned> commit(n_loads);       // c_i
 
+  std::map<uint64_t, uint64_t> last_req_cycles;
+  std::map<uint64_t, uint64_t> last_resp_cycles;
+
   for (int i = 0; i < (int)n_loads; ++i) {
     const auto& instr = *loads[i];
 
@@ -119,7 +164,7 @@ double get_thr_load_queue(const vector<Instr>& window,
     start_cycle[i] = arrival[i];
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr.IP);
+    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Loads must commit in program order
@@ -162,6 +207,9 @@ double get_thr_store_queue(const vector<Instr>& window,
   vector<unsigned> finish(n_stores);       // f_i
   vector<unsigned> commit(n_stores);       // c_i
 
+  std::map<uint64_t, uint64_t> last_req_cycles;
+  std::map<uint64_t, uint64_t> last_resp_cycles;
+
   for (int i = 0; i < (int)n_stores; ++i) {
     const auto& instr = *stores[i];
 
@@ -177,7 +225,7 @@ double get_thr_store_queue(const vector<Instr>& window,
     start_cycle[i] = arrival[i];
 
     // f_i = RespCycle(s_i, instr_i)
-    finish[i] = resp_cycle(start_cycle[i], instr.IP);
+    finish[i] = resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
 
     // c_i = max(f_i, c_{i-1})
     // Stores must commit in program order
