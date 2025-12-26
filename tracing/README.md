@@ -28,7 +28,7 @@ The tracing tool instruments programs at runtime and generates a comprehensive C
 ### Branch Analysis
 - **Direct Unconditional Branches**: Direct jumps (e.g., `jmp label`) - tracked as "direct_unconditional"
 - **Direct Conditional Branches**: Conditional jumps (e.g., `jne`, `je`) - tracked as "direct_conditional"
-- **Indirect Branches**: Branches through registers or memory (e.g., `jmp *%rax`)
+- **Indirect Branches**: Branches through registers or memory (e.g., `jmp *%rax`) - tracked as "unconditional"
 - **Branch Taken Tracking**: Records whether branches were taken or not taken at execution time
 - **Branch Target Addresses**: Captures the target address of all branch instructions
 
@@ -83,6 +83,7 @@ Detects and marks synchronization points including:
    ```bash
    cp peregrine-trace.cpp $PIN_ROOT/source/tools/MyPinTool/
    cd $PIN_ROOT/source/tools/MyPinTool/
+   mkdir obj-intel64
    ```
 
 2. **Build the pintool**:
