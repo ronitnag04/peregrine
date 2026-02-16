@@ -4,7 +4,7 @@ Generate training data for microarchitecture performance prediction.
 This script combines multiple feature types into a unified training dataset:
   1. Per-resource throughput features (from lookup table)
   2. Pipeline stall features (from trace analysis)
-  3. Branch misprediction rate (single scalar from trace/simulation)
+  3. Config scalar features (including misprediction_percent from config)
   4. (Future: Additional feature types can be added here)
 
 Feature encoding (101 dimensions per distribution):
@@ -19,7 +19,6 @@ Command-line usage:
       --config-json '{"rob_size": 256, "load_queue_size": 128}' \\
       --trace traces/my_trace.csv \\
       --window-size 400 \\
-      --branch-mispred-rate 0.023 \\
       -o training_data.pkl
 
   # Generate training data for multiple random configs (CSV format)
@@ -28,7 +27,6 @@ Command-line usage:
       --random-configs 1000 \\
       --trace traces/my_trace.csv \\
       --window-size 400 \\
-      --branch-mispred-rate 0.023 \\
       -o training_data.csv
 
 Programmatic usage:
@@ -41,8 +39,7 @@ Programmatic usage:
   config = models.Config(rob_size=256, load_queue_size=128)
   training_data = generate_training_sample(
       config, lookup, "traces/my_trace.csv",
-      window_size=400,
-      branch_misprediction_rate=0.023
+      window_size=400
   )
 
   # Multiple configurations
@@ -51,8 +48,7 @@ Programmatic usage:
   configs = [models.Config(rob_size=128), models.Config(rob_size=256)]
   training_data = generate_training_matrix(
       configs, lookup, "traces/my_trace.csv",
-      window_size=400,
-      branch_misprediction_rate=0.023
+      window_size=400
   )
 
   # Pipeline stalls only
@@ -70,7 +66,6 @@ Programmatic usage:
       trace_path="traces/my_trace.csv",
       configs=[models.Config(rob_size=256)],
       window_size=400,
-      branch_misprediction_rate=0.023,
   )
 """
 
@@ -190,13 +185,13 @@ def _add_cdf_features_to_dict(
 ) -> None:
     """
     Helper to compute CDF features and add them to feature_dict with given prefix.
-    
+
     Adds 101 features: 50 raw percentiles + 50 weighted percentiles + 1 mean.
     """
     cdf_raw, cdf_weighted, mean_val = utils.compute_cdf_features(
         latencies, num_points=num_points
     )
-    
+
     percentiles = np.linspace(1, 99, num_points)
     for j, p in enumerate(percentiles):
         feature_dict[f"{prefix}_raw_p{int(p)}"] = cdf_raw[j]
@@ -298,7 +293,6 @@ def build_training_data(
     trace_path: str,
     configs: list[models.Config],
     window_size: int = 400,
-    branch_misprediction_rate: float = 50.0,
     include_latency_features: bool = True,
     output_dir: str = "output",
     output_path: Optional[str] = None,
@@ -314,7 +308,6 @@ def build_training_data(
         trace_path: Path to trace CSV file for pipeline stall analysis
         configs: List of microarchitecture configurations to generate features for
         window_size: Window size for pipeline stall analysis (default: 400)
-        branch_misprediction_rate: Overall branch misprediction rate from trace/simulation (default: 50.0)
         include_latency_features: Whether to include ROB latency features (default: True)
         output_dir: Directory containing latency .npy files (default: "output")
         output_path: Optional path to save training data (.pkl or .csv). If None, returns DataFrame only.
@@ -350,7 +343,6 @@ def build_training_data(
             lookup_table,
             trace_path,
             window_size,
-            branch_misprediction_rate,
             include_latency_features,
             output_dir,
         )
@@ -360,7 +352,6 @@ def build_training_data(
             lookup_table,
             trace_path,
             window_size,
-            branch_misprediction_rate,
             include_latency_features,
             output_dir,
         )
@@ -488,7 +479,6 @@ def generate_training_sample(
     lookup_table: ThroughputLookupTable,
     trace_file: str,
     window_size: int,
-    branch_misprediction_rate: float = 50.0,
     include_latency_features: bool = True,
     output_dir: str = "output",
 ) -> pd.DataFrame:
@@ -500,7 +490,6 @@ def generate_training_sample(
         lookup_table: Pre-built throughput lookup table
         trace_file: Path to trace CSV file
         window_size: Window size for pipeline stall analysis
-        branch_misprediction_rate: Overall branch misprediction rate from trace/simulation (default: 50.0)
         include_latency_features: Whether to include ROB latency features (default: True)
         output_dir: Directory containing latency .npy files (default: "output")
 
@@ -509,7 +498,7 @@ def generate_training_sample(
         - Throughput features (N resources x 101 each)
         - Pipeline stall features (4 stall types x 101 each)
         - ROB latency features (2334 features, if include_latency_features=True)
-        - Branch misprediction rate (1 scalar)
+        - Config scalar features including misprediction_percent (23 features)
 
     Example:
         >>> import models
@@ -537,10 +526,8 @@ def generate_training_sample(
         latency_features = compute_rob_latency_features(output_dir)
         combined_features = pd.concat([combined_features, latency_features], axis=1)
 
-    # Add branch misprediction rate
-    combined_features["branch_misprediction_rate"] = branch_misprediction_rate
-
     # Add config scalar features (19 scalars + 2 BP one-hot + 2 prefetcher one-hot = 23 cols)
+    # Note: misprediction_percent is included in these features
     config_scalar_features = get_config_scalar_features(config)
     for key, value in config_scalar_features.items():
         combined_features[key] = value
@@ -553,7 +540,6 @@ def generate_training_matrix(
     lookup_table: ThroughputLookupTable,
     trace_file: str,
     window_size: int,
-    branch_misprediction_rate: float = 50.0,
     include_latency_features: bool = True,
     output_dir: str = "output",
 ) -> pd.DataFrame:
@@ -565,7 +551,6 @@ def generate_training_matrix(
         lookup_table: Pre-built throughput lookup table
         trace_file: Path to trace CSV file
         window_size: Window size for pipeline stall analysis
-        branch_misprediction_rate: Overall branch misprediction rate from trace/simulation (default: 50.0)
         include_latency_features: Whether to include ROB latency features (default: True)
         output_dir: Directory containing latency .npy files (default: "output")
 
@@ -616,10 +601,8 @@ def generate_training_matrix(
         latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
         training_data = pd.concat([training_data, latency_df], axis=1)
 
-    # Add branch misprediction rate (same for all configs)
-    training_data["branch_misprediction_rate"] = branch_misprediction_rate
-
     # Add config scalar features for each configuration (23 columns per config)
+    # Note: misprediction_percent is included in these features and can vary per config
     config_features_list = []
     for config in configs:
         config_features_list.append(get_config_scalar_features(config))
@@ -640,7 +623,6 @@ def main():
       --config-json '{"rob_size": 256, "load_queue_size": 128}' \\
       --trace traces/my_trace.csv \\
       --window-size 400 \\
-      --branch-mispred-rate 0.023 \\
       -o sample.pkl
 
   # Multiple random configurations (CSV format)
@@ -649,7 +631,6 @@ def main():
       --random-configs 1000 \\
       --trace traces/my_trace.csv \\
       --window-size 400 \\
-      --branch-mispred-rate 0.023 \\
       -o training_data.csv
         """,
     )
@@ -672,12 +653,6 @@ def main():
         type=int,
         default=400,
         help="Window size for pipeline stall analysis (must match C++ model, default: 400)",
-    )
-    parser.add_argument(
-        "--branch-mispred-rate",
-        type=float,
-        default=50.0,
-        help="Overall branch misprediction rate from trace/simulation (default: 50.0)",
     )
 
     # Configuration specification (mutually exclusive)
@@ -748,7 +723,6 @@ def main():
     print("=" * 70)
     print(f"Trace file: {args.trace}")
     print(f"Window size: {args.window_size}")
-    print(f"Branch misprediction rate: {args.branch_mispred_rate:.4f}")
     print()
 
     if len(configs) == 1:
@@ -758,7 +732,6 @@ def main():
             lookup_table,
             args.trace,
             args.window_size,
-            args.branch_mispred_rate,
         )
     else:
         # Multiple samples
@@ -767,7 +740,6 @@ def main():
             lookup_table,
             args.trace,
             args.window_size,
-            args.branch_mispred_rate,
         )
 
     # Save to file (format based on extension)
