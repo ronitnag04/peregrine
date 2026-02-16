@@ -95,7 +95,7 @@ class Config:
     max_icache_fills: int = 8  # [1..32]
 
     # Branch predictor and accuracy
-    branch_predictor: int = 1  # 0/1 (linear)
+    branch_predictor: int = 0  # 0/1 (linear)
     misprediction_percent: int = 5  # [0..100]
 
     # Caches (KB)
