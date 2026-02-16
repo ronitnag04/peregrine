@@ -76,5 +76,13 @@ int main(int argc, char* argv[]) {
   analytical::export_throughputs(per_res_thr_vecs);
   std::cout << "Done.\n";
 
+  std::cout << "\nCalculating ROB latency analysis...\n";
+  std::vector<analytical::RobLatencyData> latency_data =
+      analytical::get_rob_latency_analysis(instrs);
+
+  std::cout << "\nExporting latency analysis to ./output ...\n";
+  analytical::export_latency_analysis(latency_data);
+  std::cout << "Done.\n";
+
   return 0;
 }

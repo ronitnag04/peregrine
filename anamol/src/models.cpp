@@ -1,13 +1,15 @@
+#include "models.h"
+
 #include <cassert>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "instr.h"
-#include "models.h"
 #include "params.h"
 #include "resources.h"
 
@@ -555,6 +557,99 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
   return PER_RES_THR_VECS;
 }
 
+// ROB Latency Analysis Implementation
+std::vector<RobLatencyData> get_rob_latency_analysis(
+    const std::vector<Instr>& instr_trace) {
+  if (instr_trace.empty()) return {};
+
+  std::vector<RobLatencyData> results;
+
+  // ROB sizes: {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
+  std::vector<uint16_t> rob_sizes;
+  for (uint16_t size = 1; size <= 1024; size *= 2) {
+    rob_sizes.push_back(size);
+  }
+
+  std::cout << "\nRunning ROB latency analysis for " << rob_sizes.size()
+            << " configurations...\n";
+
+  for (uint16_t rob_size : rob_sizes) {
+    RobLatencyData data;
+    data.rob_size = rob_size;
+
+    instr_id_t k = instr_trace.size();
+    instr_id_t firstID = instr_trace[0].id;
+
+    std::vector<unsigned> arrival(k);      // a_i
+    std::vector<unsigned> start_cycle(k);  // s_i
+    std::vector<unsigned> finish(k);       // f_i
+    std::vector<unsigned> commit(k);       // c_i
+
+    std::map<unsigned, unsigned> last_req_cycles;
+    std::map<unsigned, unsigned> last_resp_cycles;
+
+    // Run ROB simulation for entire trace
+    for (unsigned i = 0; i < k; ++i) {
+      const auto& instr = instr_trace[i];
+
+      // a_i = c_{i-ROB}
+      if (i < rob_size) {
+        arrival[i] = 0;
+      } else {
+        arrival[i] = commit[i - rob_size];
+      }
+
+      // s_i = max(a_i, max{f_d | d in Dep(i)})
+      instr_id_t max_dep_finish = arrival[i];
+      for (instr_id_t dep_id : instr.deps) {
+        int dep_idx = dep_id - firstID;
+        if (dep_idx >= 0 && dep_idx < (int)i) {
+          max_dep_finish = std::max(max_dep_finish, finish[dep_idx]);
+        }
+      }
+      start_cycle[i] = max_dep_finish;
+
+      // f_i = RespCycle(s_i, instr_i)
+      finish[i] =
+          resp_cycle(start_cycle[i], instr, last_req_cycles, last_resp_cycles);
+
+      // c_i = max(f_i, c_{i-1})
+      if (i == 0) {
+        commit[i] = finish[i];
+      } else {
+        commit[i] = std::max(finish[i], commit[i - 1]);
+      }
+    }
+
+    // Compute overall throughput
+    uint32_t final_commit = commit[k - 1];
+    if (final_commit == 0) {
+      data.overall_throughput = k;
+    } else {
+      data.overall_throughput = (double)k / final_commit;
+    }
+
+    // Collect latency values
+    data.issue_latencies.reserve(k);
+    data.commit_latencies.reserve(k);
+    data.exec_latencies.reserve(k);
+
+    for (unsigned i = 0; i < k; ++i) {
+      data.issue_latencies.push_back(start_cycle[i] - arrival[i]);
+      data.commit_latencies.push_back(commit[i] - finish[i]);
+      data.exec_latencies.push_back(finish[i] - start_cycle[i]);
+    }
+
+    results.push_back(data);
+
+    std::cout << "  ROB size " << rob_size
+              << ": throughput = " << data.overall_throughput << " IPC\n";
+  }
+
+  std::cout << "ROB latency analysis complete.\n";
+  return results;
+}
+
 // Helper: map Resource enum to file-friendly name
 static const char* resource_file_name(Resource res) {
   switch (res) {
@@ -698,6 +793,78 @@ void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
     std::string fname = std::string("output/thr_") + res_name + ".npy";
     write_npy_2d_float64(fname, rows, cols, array);
   }
+}
+
+void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
+  if (latency_data.empty()) return;
+
+  std::cout << "\nExporting latency analysis to ./output ...\n";
+
+  // Ensure output directory exists
+  std::system("mkdir -p output");
+
+  size_t num_rob_sizes = latency_data.size();
+  size_t num_instructions = latency_data[0].issue_latencies.size();
+
+  // 1. Export overall throughput: shape (11, 2) [rob_size, throughput]
+  {
+    std::vector<double> thr_data(num_rob_sizes * 2);
+    for (size_t i = 0; i < num_rob_sizes; ++i) {
+      thr_data[i * 2 + 0] = latency_data[i].rob_size;
+      thr_data[i * 2 + 1] = latency_data[i].overall_throughput;
+    }
+    write_npy_2d_float64("output/rob_latency_overall_thr.npy", num_rob_sizes, 2,
+                         thr_data);
+    std::cout << "  Wrote rob_latency_overall_thr.npy (" << num_rob_sizes
+              << " x 2)\n";
+  }
+
+  // 2. Export issue latencies: shape (11, k)
+  {
+    std::vector<double> issue_data(num_rob_sizes * num_instructions);
+    for (size_t i = 0; i < num_rob_sizes; ++i) {
+      for (size_t j = 0; j < num_instructions; ++j) {
+        issue_data[i * num_instructions + j] =
+            latency_data[i].issue_latencies[j];
+      }
+    }
+    write_npy_2d_float64("output/rob_latency_issue.npy", num_rob_sizes,
+                         num_instructions, issue_data);
+    std::cout << "  Wrote rob_latency_issue.npy (" << num_rob_sizes << " x "
+              << num_instructions << ")\n";
+  }
+
+  // 3. Export commit latencies: shape (11, k)
+  {
+    std::vector<double> commit_data(num_rob_sizes * num_instructions);
+    for (size_t i = 0; i < num_rob_sizes; ++i) {
+      for (size_t j = 0; j < num_instructions; ++j) {
+        commit_data[i * num_instructions + j] =
+            latency_data[i].commit_latencies[j];
+      }
+    }
+    write_npy_2d_float64("output/rob_latency_commit.npy", num_rob_sizes,
+                         num_instructions, commit_data);
+    std::cout << "  Wrote rob_latency_commit.npy (" << num_rob_sizes << " x "
+              << num_instructions << ")\n";
+  }
+
+  // 4. Export exec latencies: shape (11, k) - one row per ROB size
+  //    (even though they might be similar across ROB sizes)
+  {
+    std::vector<double> exec_data(num_rob_sizes * num_instructions);
+    for (size_t i = 0; i < num_rob_sizes; ++i) {
+      for (size_t j = 0; j < num_instructions; ++j) {
+        exec_data[i * num_instructions + j] = latency_data[i].exec_latencies[j];
+      }
+    }
+    write_npy_2d_float64("output/rob_latency_exec.npy", num_rob_sizes,
+                         num_instructions, exec_data);
+    std::cout << "  Wrote rob_latency_exec.npy (" << num_rob_sizes << " x "
+              << num_instructions << ")\n";
+  }
+
+  std::cout << "Latency analysis export complete.\n";
 }
 
 }  // namespace analytical

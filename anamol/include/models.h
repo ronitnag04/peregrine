@@ -4,8 +4,8 @@
 #include <array>
 #include <cstdint>
 #include <functional>
-#include <vector>
 #include <map>
+#include <vector>
 
 #include "instr.h"
 #include "params.h"
@@ -14,12 +14,9 @@
 namespace analytical {
 
 // resp_cycle from Algorithm 1
-uint64_t resp_cycle(
-    uint64_t req_cycle,
-    Instr instr,
-    std::map<uint64_t, uint64_t> last_req_cycles,
-    std::map<uint64_t, uint64_t> last_resp_cycles
-);
+uint64_t resp_cycle(uint64_t req_cycle, Instr instr,
+                    std::map<uint64_t, uint64_t> last_req_cycles,
+                    std::map<uint64_t, uint64_t> last_resp_cycles);
 
 ////////////////////////////////////////////////////////////////////////////
 // Base Throughput Calculations
@@ -140,6 +137,25 @@ PerResThrVecs get_throughput(std::vector<Instr> instr_trace,
                              int window_size = 400);
 
 void export_throughputs(PerResThrVecs PER_RES_THR_VECS);
+
+////////////////////////////////////////////////////////////////////////////
+// ROB Latency Analysis
+////////////////////////////////////////////////////////////////////////////
+struct RobLatencyData {
+  uint16_t rob_size;
+  double overall_throughput;  // total_instructions / final_commit_cycle
+  std::vector<uint32_t> issue_latencies;   // s_i - a_i for all instructions
+  std::vector<uint32_t> commit_latencies;  // c_i - f_i for all instructions
+  std::vector<uint32_t> exec_latencies;    // f_i - s_i for all instructions
+};
+
+// Analyze ROB latency characteristics across the entire trace
+// Returns data for each ROB size in {1, 2, 4, 8, ..., 1024}
+std::vector<RobLatencyData> get_rob_latency_analysis(
+    const std::vector<Instr>& instr_trace);
+
+// Export latency analysis results to .npy files in output/
+void export_latency_analysis(const std::vector<RobLatencyData>& latency_data);
 
 }  // namespace analytical
 
