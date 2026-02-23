@@ -17,3 +17,5 @@ wheels/
 
 # System
 .DS_Store
+
+anamol/output
