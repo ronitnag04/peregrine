@@ -1,15 +1,8 @@
-# Analytical Model Specifications
-
-## How to export
-
-```bash
-brew install pandoc # use pandoc to convert markdown to pdf
-brew install mactex # use mactex to render the embedded latex
-
-pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
-```
+# Analytical & gem5 Model Specifications
 
 ## Table of Contents
+
+**Out-of-order Core Parameters:**
 1. [Re-order Buffer](#re-order-buffer)
 2. [Load Queue](#load-queue)
 3. [Store Queue](#store-queue)
@@ -20,8 +13,13 @@ pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
 8. [Floating-Point Issue Width](#floating-point-issue-width)
 9. [Load-Store Issue Width](#load-store-issue-width)
 10. [Load and Load-Store Pipes](#load-and-load-store-pipes)
-11. [Maximum I-Cache Fills](#maximum-i-cache-fills)
-12. [Fetch Buffers](#fetch-buffers)
+11. [Fetch Buffers](#fetch-buffers)
+12. [Maximum I-Cache Fills](#maximum-i-cache-fills)
+13. [Cache Configuration](#cache-configuration)
+14. [Branch Predictor](#branch-predictor)
+
+**Other:**
+[How to export this file to a PDF](#how-to-export-this-file-to-a-pdf)
 
 # Re-order Buffer
 ## Description
@@ -112,7 +110,7 @@ $$\text{thr}_j^{\text{LQ}} = \frac{k}{c_{kj} - c_{k(j-1)}}$$
 
 ## gem5 Representation
 
-We configure the ROB size of our core in gem5 by setting the already exposed `LQEntries` attribute of the
+We configure the load queue size of our core in gem5 by setting the already exposed `LQEntries` attribute of the
 `X86O3CPU` class in `configs/peregrine/peregrine.py`.
 
 # Store Queue
@@ -136,7 +134,7 @@ instructions:
 
 The equations mirror the ROB model:
 
-$$a_i = c_{i - \text{LQ}}$$
+$$a_i = c_{i - \text{SQ}}$$
 $$s_i = a_i$$
 $$f_i = \text{RespCycle}(s_i, \text{instr}_i)$$
 $$c_i = \max(f_i,\ c_{i-1})$$
@@ -148,16 +146,16 @@ distributions produced by the models could (and probably should) look quite diff
 
 And the throughput for the $j$-th window of $k$ instructions is computed the same way:
 
-$$\text{thr}_j^{\text{LQ}} = \frac{k}{c_{kj} - c_{k(j-1)}}$$
+$$\text{thr}_j^{\text{SQ}} = \frac{k}{c_{kj} - c_{k(j-1)}}$$
 
 ## gem5 Representation
 
-We configure the ROB size of our core in gem5 by setting the already exposed `SQEntries` attribute of the
+We configure the store queue size of our core in gem5 by setting the already exposed `SQEntries` attribute of the
 `X86O3CPU` class in `configs/peregrine/peregrine.py`.
 
 # Commit Width
 ## Description
-A CPU's commit width is the maximum number of instructions that can be committed (i.e. have their results
+A CPU's commit width is the maximum number of instructions that can be committed (i.e., have their results
 be written to registers/memory) in a single clock cycle. 
 
 ## Model Overview
@@ -233,9 +231,11 @@ $$\text{thr}_j^{\text{ALU}} = \frac{k}{n_j^{\text{ALU}}} \times W_\text{ALU}$$
 
 where $n_j^{\text{ALU}}$ is the number of ALU instructions in window $j$.
 
+TODO: modify to separate Mult/Div instructions from normal ALU instructions.
+
 ## gem5 Representation
 
-TODO
+We configure the ALU issue width of our core in gem5 by setting the already exposed `instQueues` attribute of the `X86O3CPU` class in `configs/peregrine/peregrine.py`. This consists of an `IQUnit` with its `fuPool` set with a list of `FUDesc` objects. We configured our core to have separate issue widths for normal INT ALU commands and INT MULT/DIV ALU commands. The issue widths are configured with the `count` attribute of the `IntALU` and `IntMultDiv` functional units descriptions in the `fuPool` list.
 
 # Floating-Point Issue Width
 ## Description
@@ -255,9 +255,11 @@ $$\text{thr}_j^{\text{FP}} = \frac{k}{n_j^{\text{FP}}} \times W_\text{FP}$$
 
 where $n_j^{\text{FP}}$ is the count of floating-point instructions in window $j$.
 
+TODO: modify to separate FP Mult/Div instructions from normal FP ALU instructions.
+
 ## gem5 Representation
 
-TODO
+Similarly to normal ALU issue width, we configure the `fuPool` with `FUDesc` objects called `FP_ALU` and `FP_MultDiv`, with their `count` attributes set to the intended issue width.
 
 # Load-Store Issue Width
 ## Description
@@ -277,9 +279,11 @@ $$\text{thr}_j^{\text{LS}} = \frac{k}{n_j^{\text{LS}}} \times W_\text{LS}$$
 
 where $n_j^{\text{LS}}$ is the total count of load and store instructions in window $j$.
 
+TODO: account for load issue width and load-store issue width.
+
 ## gem5 Representation
 
-TODO
+Similarly to ALU and FP issue widths, for load-store issue width, we configure the `fuPool` with `FUDesc` objects called `ReadPort` (load issue width) and `RdWrPort` (load-store issue width), with their `count` attributes set to the intended issue width.
 
 # Load and Load-Store Pipes
 ## Description
@@ -319,7 +323,19 @@ This minimises idle pipe time and gives a **upper bound on throughput** $\text{t
 
 ## gem5 Representation
 
-Opted to only include load/store queues and load/store issue width.
+We opted to only include load/store queues and load/store issue width.
+
+# Fetch Buffers
+## Description
+The fetch buffer (sometimes called the fetch queue or instruction buffer) sits between the I-cache and the decode stage. It holds instructions that have been fetched from the I-cache and are waiting to be decoded. When the fetch buffer is full, the frontend stalls even if the I-cache is able to supply more instructions. Conversely, when the fetch buffer drains faster than the I-cache can refill it — for instance due to I-cache misses — the decode stage can be starved of instructions.
+
+## Model Overview
+
+TODO: still not really clear
+
+## gem5 Representation
+
+We opted to ignore this parameterization.
 
 # Maximum I-Cache Fills
 ## Description
@@ -341,18 +357,54 @@ The I-cache latency estimates used in the simulation come from the in-order I-ca
 
 ## gem5 Representation
 
-We can configure this parameter in our gem5 CPU by setting the MSHR count in the gem5 cache object.
+We control the number of in-flight requests the I-Cache can have by configuring the number of MSHRs (Miss-Status Hit Registers) in the i-cache system. The core's cache hierarchy is defined when the core processor and the cache hierarchy are connected together by the system board. The `L1ICache` object has a `mshrs` parameter that is configured to match the maximum i-cache fills constraint. 
 
-# Fetch Buffers
-## Description
-The fetch buffer (sometimes called the fetch queue or instruction buffer) sits between the I-cache and the decode stage. It holds instructions that have been fetched from the I-cache and are waiting to be decoded. When the fetch buffer is full, the frontend stalls even if the I-cache is able to supply more instructions. Conversely, when the fetch buffer drains faster than the I-cache can refill it — for instance due to I-cache misses — the decode stage can be starved of instructions.
+# Cache Configuration
+A CPU's cache configuration or cache hierarchy is how the processor interacts with the memory system. Our system consisted of a 2 level cache hierarchy, with a split L1 I-cache and D-cache, and a shared L2 cache. The L1 D-cache has a stride prefetcher. We parameterize the L1d cache size, L1i cache size, L2 cache size, and L1d stride prefetcher degree.
 
 ## Model Overview
 
-TODO: still not really clear
+The analytical cache model is implemented in `evantrace/caches.py`. Each cache is parameterized by line
+size, total size, associativity, replacement policy, and read/write latency. A cache can have a parent
+cache; misses are forwarded to the parent (or to main memory if there is no parent), and the returned
+latency is the cache's own latency plus the parent's latency for misses and, when applicable, writeback
+of a dirty victim. The trace is run through this hierarchy (I-cache for instruction addresses, D-cache
+for load/store addresses) to compute per-instruction **fetch_latency** (I-cache read on the instruction
+pointer) and **exec_latency** (opcode latency plus D-cache read or write latency for loads and stores).
+These values are written into the instruction trace.
+
+The anamol throughput models consume these trace fields. **fetch_latency** is used in the maximum
+I-cache fills model and the fetch-buffers model. **exec_latency** (stored as `exe_latency` in the
+trace) is used in `resp_cycle` in `models.cpp`: it determines the finish cycle of each instruction
+and thus feeds the ROB, load-queue, and store-queue throughput models.
 
 ## gem5 Representation
 
-Ignore for now.
+The core's cache hierarchy can be parameterized directly when instantiated and connected to the core through the system board. We control the `l1d_size`, `l1i_size`, and `l2_size` arguments to the `PrivateL1SharedL2CacheHierarchy` object in `configs/peregrine/peregrine.py`. The `PrefetcherCls` argument to the `PrivateL1SharedL2CacheHierarchy` object is also set to the `StridePrefetcher` class in `configs/peregrine/peregrine.py`, where the `degree` argument is set to control the stride prefetching degree.
 
+# Branch Predictor
+The CPU's branch predictor controls the instruction fetching frontend of the out-of-order pipeline. There are various types of predictors that take inputs like the current PC, branch history, etc., to predict the next PC. This allows the front-end to fetch instructions after a branch instruction before it can even be evaluated later in the pipeline.
 
+## Model Overview
+
+The analytical branch predictor model is implemented in `evantrace/branch_predictor.py`. Implementations
+include simple predictor configurations and a TAGE config. Each predictor exposes `predict(inst_ptr, branch_type)` → taken/not taken and `update(inst_ptr, branch_type, predicted_taken, actual_taken)`.
+
+In `evantrace/sim.py`, the trace is run in order: for each instruction, `predicted_taken` is obtained
+from the predictor's `predict`, then the predictor is updated with `predicted_taken` and the actual
+outcome `instruction.branch_taken`. 
+
+TODO: Use the branch misprediction rate and distribution as output features for the ML model training.
+
+## gem5 Representation
+
+We configure the branch predictor of our core in gem5 by setting the already exposed `branchPred` attribute of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# How to export this file to a PDF
+
+```bash
+brew install pandoc # use pandoc to convert markdown to pdf
+brew install mactex # use mactex to render the embedded latex
+
+pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
+```
