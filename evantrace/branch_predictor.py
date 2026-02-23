@@ -45,7 +45,7 @@ class SimpleBranchPredictor(BranchPredictor):
     For conditional branches, predicts randomly with 50% chance of taken/not taken.
     """
     
-    def __init__(self, random_seed: int | None = None):
+    def __init__(self, random_seed: int | None = None, type: str = "random"):
         """
         Initialize the simple branch predictor.
         
@@ -55,19 +55,42 @@ class SimpleBranchPredictor(BranchPredictor):
         self.rng = np.random.default_rng(random_seed)
         self.total_predictions = 0
         self.total_mispredictions = 0
+        self.type = type
+        valid_types = ["random", "always_taken", "always_not_taken"]
+        if type == "random":
+            self.predict = self._predict_random
+        elif type == "always_taken":
+            self.predict = self._predict_always_taken
+        elif type == "always_not_taken":
+            self.predict = self._predict_always_not_taken
+        else:
+            raise ValueError(f"Invalid type: {type}, must be one of {valid_types}")
     
-    def predict(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
+    def _predict_always_taken(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
+        """
+        Predict whether a branch will be taken.
+        For conditional branches, predicts always taken.
+        """
+        self.total_predictions += 1
+        return True
+
+    def _predict_always_not_taken(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
+        """
+        Predict whether a branch will be taken.
+        For conditional branches, predicts always not taken.
+        """
+        self.total_predictions += 1
+        # Unconditional branches are always taken
+        if branch_type == Branch_Type.direct_unconditional or branch_type == Branch_Type.indirect:
+            return True
+
+        return False
+
+    def _predict_random(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
         """
         Predict whether a branch will be taken.
         For unconditional and indirect branches, always predicts taken.
-        For conditional branches, predicts randomly (50% chance of taken/not taken).
-        
-        Args:
-            inst_ptr: Instruction pointer (address) of the branch instruction
-            branch_type: Type of branch
-        
-        Returns:
-            True if branch is predicted taken, False otherwise
+        For conditional branches, predicts always taken.
         """
         self.total_predictions += 1
         
@@ -77,6 +100,12 @@ class SimpleBranchPredictor(BranchPredictor):
         
         # For conditional branches, predict randomly
         return self.rng.random() < 0.5
+
+    def predict(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
+        """
+        Predict whether a branch will be taken.
+        """
+        return self.predict(inst_ptr, branch_type)
 
     def update(self, inst_ptr: np.uint64, branch_type: Branch_Type, predicted_taken: bool, actual_taken: bool):
         """
@@ -113,11 +142,11 @@ class TAGEBranchPredictor(BranchPredictor):
     
     def __init__(
         self,
-        num_tables: int = 4,
+        num_tables: int = 3,
         table_sizes: list[int] | None = None,
         history_lengths: list[int] | None = None,
         tag_bits: int = 10,
-        counter_bits: int = 2
+        counter_bits: int = 3
     ):
         """
         Initialize the TAGE branch predictor.

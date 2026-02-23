@@ -32,7 +32,7 @@ def main():
         parent=l2cache
     )
 
-    branch_predictor = TAGEBranchPredictor()
+    branch_predictor = SimpleBranchPredictor(type="always_not_taken")
     
     sim = Sim(trace=instructions, icache=icache, dcache=dcache, l2cache=l2cache, branch_predictor=branch_predictor)
     sim.run()
