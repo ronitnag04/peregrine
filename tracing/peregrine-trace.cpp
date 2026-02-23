@@ -12,7 +12,13 @@ extern "C"
 #include <algorithm>
 
 FILE* trace;
-CONTEXT* ctx; 
+CONTEXT* ctx;
+
+// Region-based tracing: only trace between start_trace() and end_trace() calls
+static volatile bool tracing_enabled = false;
+
+VOID enable_tracing(void) { tracing_enabled = true; }
+VOID disable_tracing(void) { tracing_enabled = false; } 
 
 typedef struct {
   unsigned long addr;
@@ -94,14 +100,17 @@ std::set<unsigned long> sync_points = {
 std::map<std::string, unsigned long> last_reg_write_ip;
 
 VOID track_branch_address(instruction_data_t *id, unsigned long branch_target_addr) {
+  if (!tracing_enabled) return;
   id->branch_target_addr = branch_target_addr;
 }
 
 VOID track_branch_taken(instruction_data_t *id, BOOL branch_taken) {
+  if (!tracing_enabled) return;
   id->branch_taken = branch_taken;
 }
 
 VOID log_read_op(VOID *ip, VOID *addr, UINT32 size) {
+  if (!tracing_enabled) return;
   mem_access_t access;
   access.addr = (unsigned long)addr;
   access.size = size;
@@ -109,6 +118,7 @@ VOID log_read_op(VOID *ip, VOID *addr, UINT32 size) {
 }
 
 VOID log_write_op(VOID *ip, VOID *addr, UINT32 size) {
+  if (!tracing_enabled) return;
   mem_access_t access;
   access.addr = (unsigned long)addr;
   access.size = size;
@@ -145,6 +155,7 @@ std::string escape_csv_field(const std::string& field) {
 }
 
 VOID log_instruction(CONTEXT* ctx, instruction_data_t *id) {
+  if (!tracing_enabled) return;
   // Compute register dependencies at EXECUTION time (not instrumentation time)
   // This ensures dependencies are tracked based on execution order, not binary order
   for (const auto& reg : id->read_registers) {
@@ -322,6 +333,22 @@ VOID log_instruction(CONTEXT* ctx, instruction_data_t *id) {
   write_addresses.clear();
 }
 
+VOID instrument_routine(RTN rtn, VOID* v) {
+  const std::string name = RTN_Valid(rtn) ? RTN_Name(rtn) : "";
+  // Match both "start_trace" and "_start_trace" (some toolchains add leading underscore)
+  const bool is_start = (name == "start_trace" || name == "_start_trace");
+  const bool is_end   = (name == "end_trace"   || name == "_end_trace");
+  if (is_start) {
+    RTN_Open(rtn);
+    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)enable_tracing, IARG_END);
+    RTN_Close(rtn);
+  } else if (is_end) {
+    RTN_Open(rtn);
+    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)disable_tracing, IARG_END);
+    RTN_Close(rtn);
+  }
+}
+
 VOID trace_instr(INS ins, VOID* v) {
     instruction_data_t *id = new instruction_data_t();
     id->ip = INS_Address(ins);
@@ -414,6 +441,7 @@ int main(int argc, char* argv[])
 	// Write CSV header
 	fprintf(trace, "IP,Assembly,Category,Opcode,Branch Type,Branch Taken,Branch Target Address,Instruction Sync,Read Registers,Write Registers,Register Dependent IPs,Read Addresses,Write Addresses,Memory Dependent IPs\n");
 
+	RTN_AddInstrumentFunction(instrument_routine, 0);
 	INS_AddInstrumentFunction(trace_instr, 0);
 
 	PIN_AddFiniFunction(Fini, 0);

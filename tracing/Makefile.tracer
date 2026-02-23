@@ -1,0 +1,33 @@
+# Makefile.tracer: trace each benchmark in BMARKS_DIR into traces/<bmark>/
+# Usage: make -f Makefile.tracer [all]
+# Requires: PIN_ROOT set, obj-intel64/peregrine-trace.so built
+
+BMARKS_DIR ?= /home/aa/users/cs199-akg/cs294-262/concorde-benchmarks/build
+PIN_ROOT ?= /home/aa/users/cs199-akg/cs294-262/pin-external-3.31-98869-gfa6f126a8-gcc-linux
+
+# All executables in BMARKS_DIR (basenames only)
+BMARKS := $(notdir $(wildcard $(BMARKS_DIR)/*))
+
+# Each benchmark gets traces/<bmark>/trace.csv
+TRACE_CSVS := $(addprefix traces/,$(addsuffix /trace.csv,$(BMARKS)))
+
+.PHONY: all clean trace-all
+
+all: trace-all
+
+trace-all: obj-intel64/peregrine-trace.so $(TRACE_CSVS)
+	@echo "Traced all benchmarks."
+
+# Run pin and move trace.csv into the benchmark folder
+traces/%/trace.csv: traces/%/% obj-intel64/peregrine-trace.so
+	$(PIN_ROOT)/pin -t obj-intel64/peregrine-trace.so -- traces/$*/$*
+	mv trace.csv traces/$*/trace.csv
+	@echo "Traced $* -> traces/$*/trace.csv"
+
+# Create folder and copy executable from BMARKS_DIR
+traces/%/%: $(BMARKS_DIR)/%
+	@mkdir -p traces/$*
+	cp $(BMARKS_DIR)/$* traces/$*/$*
+
+clean:
+	rm -rf traces/*/
