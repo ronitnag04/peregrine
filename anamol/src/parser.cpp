@@ -1,11 +1,13 @@
+#include "parser.h"
+
 #include <algorithm>
+#include <cstdio>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
-#include <cstdio>
 
 #include "csv.h"
-#include "parser.h"
+#include "opcode_categories.h"
 
 namespace analytical {
 
@@ -74,12 +76,12 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
                   io::double_quote_escape<',', '"'>>
         in(csv_path);
 
-    in.read_header(io::ignore_extra_column, "IP", "Assembly", "Category",
-                    "Opcode", "Branch Type", "Branch Taken", "Branch Target Address",
-                    "Instruction Sync", "Read Registers", "Write Registers",
-                    "Register Dependent IPs", "Read Addresses",
-                    "Write Addresses", "Memory Dependent IPs",
-                    "Fetch Latency", "Execution Latency");
+    in.read_header(
+        io::ignore_extra_column, "IP", "Assembly", "Category", "Opcode",
+        "Branch Type", "Branch Taken", "Branch Target Address",
+        "Instruction Sync", "Read Registers", "Write Registers",
+        "Register Dependent IPs", "Read Addresses", "Write Addresses",
+        "Memory Dependent IPs", "Fetch Latency", "Execution Latency");
 
     std::string ip_str, assembly, category, opcode;
     std::string branch_type, branch_taken, branch_target_addr;
@@ -90,15 +92,11 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
 
     uint64_t row = 2;
 
-    while (
-      in.read_row(
-        ip_str, assembly, category, opcode,
-        branch_type, branch_taken, branch_target_addr,
-        inst_sync_str, read_regs_str, write_regs_str,
-        reg_deps_str, read_addrs_str, write_addrs_str,
-        mem_deps_str, fetch_latency_str, exec_latency_str
-      )
-    ) {
+    while (in.read_row(ip_str, assembly, category, opcode, branch_type,
+                       branch_taken, branch_target_addr, inst_sync_str,
+                       read_regs_str, write_regs_str, reg_deps_str,
+                       read_addrs_str, write_addrs_str, mem_deps_str,
+                       fetch_latency_str, exec_latency_str)) {
       tracing::instr_trace_t inst;
 
       inst.ip = parse_hex(ip_str);
@@ -118,15 +116,17 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
       inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
 
       if (fetch_latency_str.empty()) {
-        throw std::runtime_error("Missing fetch latency at row: {}" + std::to_string(row));
+        throw std::runtime_error("Missing fetch latency at row: {}" +
+                                 std::to_string(row));
       }
 
       inst.fetch_latency = std::stoul(fetch_latency_str);
 
       if (exec_latency_str.empty()) {
-        throw std::runtime_error("Missing execution latency at row {}" + std::to_string(row));
+        throw std::runtime_error("Missing execution latency at row {}" +
+                                 std::to_string(row));
       }
-      
+
       inst.exe_latency = std::stoul(exec_latency_str);
 
       instructions.push_back(inst);
@@ -146,15 +146,16 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
   result.exe_latency = inst.exe_latency;
   result.fetch_latency = inst.fetch_latency;
 
-  // Determine instruction type
-  result.is_alu = (inst.category == "BINARY" || inst.category == "LOGICAL" ||
-                   inst.category == "SHIFT" || inst.category == "MISC");
-  result.is_fp = (inst.category == "X87_ALU" || inst.category == "SSE" ||
-                  inst.category == "AVX" || inst.category == "AVX2");
+  // Determine instruction type from opcode lookup table
+  uint8_t opcat = get_opcode_categories(inst.opcode);
+  result.is_alu = (opcat & OPCAT_ALU) != 0;
+  result.is_mul = (opcat & OPCAT_MUL) != 0;
+  result.is_div = (opcat & OPCAT_DIV) != 0;
+  result.is_fp = (opcat & OPCAT_FP) != 0;
 
   result.is_load = !inst.read_addresses.empty();
   result.is_store = !inst.write_addresses.empty();
-  
+
   // if the instruction was a load, store its read address
   if (result.is_load) {
     result.read_address = inst.read_addresses.front().addr;
