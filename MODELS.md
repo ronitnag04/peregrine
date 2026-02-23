@@ -19,6 +19,9 @@ pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
 7. [ALU Issue Width](#alu-issue-width)
 8. [Floating-Point Issue Width](#floating-point-issue-width)
 9. [Load-Store Issue Width](#load-store-issue-width)
+10. [Load and Load-Store Pipes](#load-and-load-store-pipes)
+11. [Maximum I-Cache Fills](#maximum-i-cache-fills)
+12. [Fetch Buffers](#fetch-buffers)
 
 # Re-order Buffer
 ## Description
@@ -277,5 +280,79 @@ where $n_j^{\text{LS}}$ is the total count of load and store instructions in win
 ## gem5 Representation
 
 TODO
+
+# Load and Load-Store Pipes
+## Description
+Load and Load-Store pipes are execution pipes that service memory instructions and crucially ensure that
+memory dependencies are honored. Load pipes only service load instructions, while load-store pipes can service
+both load and store instructions.
+
+## Model Overview
+
+The number of load pipes and number of load-store pipes are modelled **jointly** as a single dynamic constraint since they closely interact with each other (store instructions compete with load instructions for load-store
+pipes). Rather than computing exact throughputs, this model computes upper and lower bounds on throughput corresponding to best-case and worst-case allocation, respectively.
+
+For a window of $k$ consecutive instructions, let:
+
+- $n_\text{Load}$ = number of load instructions
+- $n_\text{Store}$ = number of store instructions
+- $\text{LSP}$ = number of load-store pipes
+- $\text{LP}$ = number of load pipes
+
+### The Lower Bound: Worst-Case Allocation
+
+The worst-case pipe allocation is to issue all loads first, using every available pipe (both load-store and load pipes), and only then begin issuing stores using the load-store pipes. This leaves the load pipes sitting idle during the store-issuing phase — a wasteful allocation that maximises total processing time.
+
+The maximum total processing time under this allocation is:
+
+$$T_\text{max} = \frac{n_\text{Load}}{\text{LSP} + \text{LP}} + \frac{n_\text{Store}}{\text{LSP}}$$
+
+This gives a **lower bound on throughput**:
+
+$$\text{thr}^\text{lower} = \frac{k}{T_\text{max}}$$
+
+### The Upper Bound: Best-Case Allocation
+
+The best-case allocation grants stores exclusive access to the load-store pipes while simultaneously using load pipes to issue loads in parallel. Once all stores have been issued, the load-store pipes become available to service any remaining loads alongside the load pipes.
+
+This minimises idle pipe time and gives a **upper bound on throughput** $\text{thr}^\text{upper}$, derived analogously (the paper omits the explicit formula, noting it follows the same structure as the lower bound).
+
+## gem5 Representation
+
+Opted to only include load/store queues and load/store issue width.
+
+# Maximum I-Cache Fills
+## Description
+When the CPU fetches instructions, it may need to request cache lines from the I-cache. The maximum I-cache fills parameter caps how many such requests can be outstanding simultaneously. If this limit is reached, fetch stalls until an in-flight request completes and frees a slot.
+
+## Model Overview
+
+Maximum I-cache fills is a dynamic constraint because it depends on whether a given instruction generates a new
+I-cache request, which depends on which requests are already in-flight (could be the same cache line) when the
+instruction reaches the fetch target queue. To estimate the throughput the model performs a simulation as
+follows:
+
+1. Instructions are considered in program order, with a backlog assumed to always be waiting to be fetched — i.e. the simulation is never starved of instructions to process, so the only bottleneck it models is the availability of I-cache fill slots.
+2. For each instruction, if its cache line is not already covered by an in-flight request, a new I-cache request is issued — but only once a fill slot is available. If all slots are occupied, the simulation waits until the earliest outstanding request completes.
+3. The I-cache response cycle for each instruction is recorded based on when its cache line's request completes.
+4. Using these response cycles, the throughput for each window of $k$ consecutive instructions is calculated the same way as in the ROB model — as $k$ divided by the difference in commit cycles between the start and end of the window.
+
+The I-cache latency estimates used in the simulation come from the in-order I-cache simulation performed during trace analysis (§3.1), which is run per L1i/L2 cache size configuration.
+
+## gem5 Representation
+
+We can configure this parameter in our gem5 CPU by setting the MSHR count in the gem5 cache object.
+
+# Fetch Buffers
+## Description
+The fetch buffer (sometimes called the fetch queue or instruction buffer) sits between the I-cache and the decode stage. It holds instructions that have been fetched from the I-cache and are waiting to be decoded. When the fetch buffer is full, the frontend stalls even if the I-cache is able to supply more instructions. Conversely, when the fetch buffer drains faster than the I-cache can refill it — for instance due to I-cache misses — the decode stage can be starved of instructions.
+
+## Model Overview
+
+TODO: still not really clear
+
+## gem5 Representation
+
+Ignore for now.
 
 
