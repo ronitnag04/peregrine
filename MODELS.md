@@ -16,6 +16,9 @@ pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
 4. [Commit Width](#commit-width)
 5. [Fetch Width](#fetch-width)
 6. [Rename Width](#rename-width)
+7. [ALU Issue Width](#alu-issue-width)
+8. [Floating-Point Issue Width](#floating-point-issue-width)
+9. [Load-Store Issue Width](#load-store-issue-width)
 
 # Re-order Buffer
 ## Description
@@ -186,8 +189,8 @@ micro-instructions in a single clock cycle.
 
 ## Model Overview
 
-The throughput bound imposed by the decode width is trivially the decode width itself, as it impacts all
-instructions processed by the CPU.
+The throughput bound imposed by the decode width is trivially the decode width itself, as it uniformly
+impacts all instructions processed by the CPU.
 
 ## gem5 Representation
 
@@ -201,11 +204,78 @@ registers be mapped to physical registers to eliminate false dependencies) in a 
 
 ## Model Overview
 
-The throughput bound imposed by the rename width is trivially the rename width itself, as it impacts all
-instructions processed by the CPU.
+The throughput bound imposed by the rename width is trivially the rename width itself, as it uniformly
+impacts all instructions processed by the CPU.
 
 ## gem5 Representation
 
 We configure the rename width of our core in gem5 by setting the already exposed `renameWidth` attribute
 of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# ALU Issue Width
+## Description
+A CPU's ALU issue width is the maximum number of ALU instructions that can be issued in a single clock
+cycle.
+
+## Model Overview
+
+Although the ALU issue width is also a static bandwidth resource, it affects only the subset of
+instructions that use the ALU. To find the throughput bound imposed by this parameter in isolation, we
+treat all other types of instructions as completing instantaneously. Therefore, we only consider the
+minimum time to process all ALU instructions in the given window.
+
+For a window $j$ of $k$ consecutive instructions, the throughput bound is:
+
+$$\text{thr}_j^{\text{ALU}} = \frac{k}{n_j^{\text{ALU}}} \times W_\text{ALU}$$
+
+where $n_j^{\text{ALU}}$ is the number of ALU instructions in window $j$.
+
+## gem5 Representation
+
+TODO
+
+# Floating-Point Issue Width
+## Description
+A CPU's floating-point issue width is the maximum number of floating point instructions that can be
+issued in a single clock cycle.
+
+## Model Overview
+
+Although the floating-point issue width is also a static bandwidth resource, it affects only the subset of
+instructions that use floating-point functional units. To find the throughput bound imposed by this
+parameter in isolation, we treat all other types of instructions as completing instantaneously. Therefore,
+we only consider the minimum time to process all floating-point instructions in the given window.
+
+For a window $j$ of $k$ consecutive instructions:
+
+$$\text{thr}_j^{\text{FP}} = \frac{k}{n_j^{\text{FP}}} \times W_\text{FP}$$
+
+where $n_j^{\text{FP}}$ is the count of floating-point instructions in window $j$.
+
+## gem5 Representation
+
+TODO
+
+# Load-Store Issue Width
+## Description
+A CPU's load-store issue width is the maximum number of memory instructions that can be issued in a single
+clock cycle.
+
+## Model Overview
+
+Although the load-store issue width is also a static bandwidth resource, it affects only the subset of
+instructions that interact with memory. To find the throughput bound imposed by this parameter in isolation,
+we treat all other types of instructions as completing instantaneously. Therefore, we only consider the
+minimum time to process all memory instructions in the given window.
+
+For a window $j$ of $k$ consecutive instructions:
+
+$$\text{thr}_j^{\text{LS}} = \frac{k}{n_j^{\text{LS}}} \times W_\text{LS}$$
+
+where $n_j^{\text{LS}}$ is the total count of load and store instructions in window $j$.
+
+## gem5 Representation
+
+TODO
+
 
