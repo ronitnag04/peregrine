@@ -61,7 +61,7 @@ with the convention that $c_i = 0$ for $i \leq 0$.
 
 **Equation 2 — Instruction dependency constraint.** An instruction cannot begin executing until all of its register and memory dependencies (the set $\text{Dep}(i)$, extracted during trace analysis) have finished executing. The start cycle is therefore the maximum of the instruction's arrival time and the finish times of all its dependencies.
 
-**Equation 3 — Execution finish time.** The finish cycle is computed using a function called `RespCycle`, which is a small state machine that models memory behaviour (see appendix). For non-load instructions it simply adds a fixed latency; for load instructions it accounts for cache-line contention and issue ordering (see below).
+**Equation 3 — Execution finish time.** The finish cycle is computed using `RespCycle`, which is a small state machine that models memory behaviour (will add a section for this algorithm).
 
 **Equation 4 — In-order commit constraint.** Instructions must commit in program order, so the commit cycle of instruction $i$ is the maximum of it's own finish cycle and the commit cycle of the previous instruction $i-1$.
 
