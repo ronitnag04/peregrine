@@ -7,16 +7,18 @@
 2. [Load Queue](#load-queue)
 3. [Store Queue](#store-queue)
 4. [Commit Width](#commit-width)
-5. [Fetch Width](#fetch-width)
-6. [Rename Width](#rename-width)
-7. [ALU Issue Width](#alu-issue-width)
-8. [Floating-Point Issue Width](#floating-point-issue-width)
-9. [Load-Store Issue Width](#load-store-issue-width)
-10. [Load and Load-Store Pipes](#load-and-load-store-pipes)
-11. [Fetch Buffers](#fetch-buffers)
-12. [Maximum I-Cache Fills](#maximum-i-cache-fills)
-13. [Cache Configuration](#cache-configuration)
-14. [Branch Predictor](#branch-predictor)
+5. [Writeback Width](#writeback-width)
+6. [Fetch Width](#fetch-width)
+7. [Decode Width](#decode-width)
+8. [Rename Width](#rename-width)
+9. [ALU Issue Width](#alu-issue-width)
+10. [Floating-Point Issue Width](#floating-point-issue-width)
+11. [Load-Store Issue Width](#load-store-issue-width)
+12. [Load and Load-Store Pipes](#load-and-load-store-pipes)
+13. [Fetch Buffers](#fetch-buffers)
+14. [Maximum I-Cache Fills](#maximum-i-cache-fills)
+15. [Cache Configuration](#cache-configuration)
+16. [Branch Predictor](#branch-predictor)
 
 **Other:**
 [How to export this file to a PDF](#how-to-export-this-file-to-a-pdf)
@@ -156,7 +158,7 @@ We configure the store queue size of our core in gem5 by setting the already exp
 # Commit Width
 ## Description
 A CPU's commit width is the maximum number of instructions that can be committed (i.e., have their results
-be written to registers/memory) in a single clock cycle. 
+be written to architectural state) in a single clock cycle. 
 
 ## Model Overview
 
@@ -166,6 +168,21 @@ impacts all instructions processed by the CPU.
 ## gem5 Representation
 
 We configure the commit width of our core in gem5 by setting the already exposed `commitWidth` attribute
+of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# Writeback Width
+## Description
+A CPU's writeback width is the maximum number of instructions that can update temporary storage (like physical 
+registers) in a single clock cycle.
+
+## Model Overview
+
+The throughput bound imposed by the writeback width is trivially the writeback width itself, as it uniformly
+impacts all instructions processed by the CPU.
+
+## gem5 Representation
+
+We configure the writeback width of our core in gem5 by setting the already exposed `wbWidth` attribute
 of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
 
 # Fetch Width
