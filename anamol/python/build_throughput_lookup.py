@@ -186,6 +186,8 @@ class ThroughputLookupTable:
             "load_queue": (config.load_queue_size,),
             "store_queue": (config.store_queue_size,),
             "alu_issue": (config.alu_issue_width,),
+            "alu_mul_issue": (config.alu_mul_issue_width,),
+            "alu_div_issue": (config.alu_div_issue_width,),
             "fp_issue": (config.fp_issue_width,),
             "ls_issue": (config.ls_issue_width,),
             "load_ls_pipes_lower": (config.num_ls_pipes, config.num_load_pipes),

@@ -271,6 +271,48 @@ double get_thr_alu_issue(const vector<Instr>& window,
   return k / cycles_needed;
 }
 
+// 4a. ALU Multiply Issue Width Throughput
+double get_thr_alu_mul_issue(const vector<Instr>& window,
+                             uint16_t alu_mul_issue_width) {
+  // Count ALU multiply instructions in the window
+  int n_mul = 0;
+  for (const auto& instr : window) {
+    n_mul += instr.is_mul;
+  }
+
+  // Handle edge case: no MUL instructions
+  if (n_mul == 0) return window.size();
+
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (alu_mul_issue_width == 0) return window.size();
+  uint32_t k = window.size();
+  double cycles_needed = (double)n_mul / alu_mul_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
+  return k / cycles_needed;
+}
+
+// 4b. ALU Divide Issue Width Throughput
+double get_thr_alu_div_issue(const vector<Instr>& window,
+                             uint16_t alu_div_issue_width) {
+  // Count ALU divide instructions in the window
+  int n_div = 0;
+  for (const auto& instr : window) {
+    n_div += instr.is_div;
+  }
+
+  // Handle edge case: no DIV instructions
+  if (n_div == 0) return window.size();
+
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (alu_div_issue_width == 0) return window.size();
+  uint32_t k = window.size();
+  double cycles_needed = (double)n_div / alu_div_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
+  return k / cycles_needed;
+}
+
 // 5. Floating-Point Issue Width Throughput
 double get_thr_fp_issue(const vector<Instr>& window, uint16_t fp_issue_width) {
   // Count FP instructions in the window
@@ -661,6 +703,10 @@ static const char* resource_file_name(Resource res) {
       return "STORE_QUEUE";
     case Resource::ALU_ISSUE:
       return "ALU_ISSUE";
+    case Resource::ALU_MUL_ISSUE:
+      return "ALU_MUL_ISSUE";
+    case Resource::ALU_DIV_ISSUE:
+      return "ALU_DIV_ISSUE";
     case Resource::FP_ISSUE:
       return "FP_ISSUE";
     case Resource::LS_ISSUE:

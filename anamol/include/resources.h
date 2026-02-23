@@ -10,6 +10,8 @@ enum class Resource : uint8_t {
   LOAD_QUEUE,
   STORE_QUEUE,
   ALU_ISSUE,
+  ALU_MUL_ISSUE,
+  ALU_DIV_ISSUE,
   FP_ISSUE,
   LS_ISSUE,
   LOAD_LS_PIPES_LOWER,

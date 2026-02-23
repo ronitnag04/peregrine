@@ -6,6 +6,8 @@ RESOURCE_FILES = [
     "thr_load_queue.npy",
     "thr_store_queue.npy",
     "thr_alu_issue.npy",
+    "thr_alu_mul_issue.npy",
+    "thr_alu_div_issue.npy",
     "thr_fp_issue.npy",
     "thr_ls_issue.npy",
     "thr_load_ls_pipes_lower.npy",
@@ -21,6 +23,8 @@ class Resource(Enum):
     LOAD_QUEUE = "load_queue"
     STORE_QUEUE = "store_queue"
     ALU_ISSUE = "alu_issue"
+    ALU_MUL_ISSUE = "alu_mul_issue"
+    ALU_DIV_ISSUE = "alu_div_issue"
     FP_ISSUE = "fp_issue"
     LS_ISSUE = "ls_issue"
     LOAD_LS_PIPES_LOWER = "load_ls_pipes_lower"
@@ -47,6 +51,8 @@ RESOURCE_PARAM_SPECS = {
     Resource.LOAD_QUEUE: ["LOAD_QUEUE_SIZE"],
     Resource.STORE_QUEUE: ["STORE_QUEUE_SIZE"],
     Resource.ALU_ISSUE: ["ALU_ISSUE_WIDTH"],
+    Resource.ALU_MUL_ISSUE: ["ALU_MUL_ISSUE_WIDTH"],
+    Resource.ALU_DIV_ISSUE: ["ALU_DIV_ISSUE_WIDTH"],
     Resource.FP_ISSUE: ["FP_ISSUE_WIDTH"],
     Resource.LS_ISSUE: ["LS_ISSUE_WIDTH"],
     Resource.LOAD_LS_PIPES_LOWER: ["NUM_LS_PIPES", "NUM_LOAD_PIPES"],
@@ -78,6 +84,8 @@ class Config:
 
     # Issue widths
     alu_issue_width: int = 4  # [1..8]
+    alu_mul_issue_width: int = 2  # [1..8]
+    alu_div_issue_width: int = 1  # [1..8]
     fp_issue_width: int = 4  # [1..8]
     ls_issue_width: int = 2  # [1..8]
 

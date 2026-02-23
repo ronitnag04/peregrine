@@ -32,6 +32,12 @@ double get_thr_store_queue(const std::vector<Instr>& window,
 // 4. ALU Issue Width Throughput
 double get_thr_alu_issue(const std::vector<Instr>& window,
                          uint16_t alu_issue_width);
+// 4a. ALU Multiply Issue Width Throughput
+double get_thr_alu_mul_issue(const std::vector<Instr>& window,
+                             uint16_t alu_mul_issue_width);
+// 4b. ALU Divide Issue Width Throughput
+double get_thr_alu_div_issue(const std::vector<Instr>& window,
+                             uint16_t alu_div_issue_width);
 // 5. Floating-Point Issue Width Throughput
 double get_thr_fp_issue(const std::vector<Instr>& window,
                         uint16_t fp_issue_width);
@@ -81,6 +87,14 @@ static const ResourceTable RESOURCE_TABLE = [] {
   t[(size_t)Resource::ALU_ISSUE] = {
       [](const auto& w, auto p) { return get_thr_alu_issue(w, p[0]); },
       ParamSweep{ParamType::ALU_ISSUE_WIDTH}};
+
+  t[(size_t)Resource::ALU_MUL_ISSUE] = {
+      [](const auto& w, auto p) { return get_thr_alu_mul_issue(w, p[0]); },
+      ParamSweep{ParamType::ALU_MUL_ISSUE_WIDTH}};
+
+  t[(size_t)Resource::ALU_DIV_ISSUE] = {
+      [](const auto& w, auto p) { return get_thr_alu_div_issue(w, p[0]); },
+      ParamSweep{ParamType::ALU_DIV_ISSUE_WIDTH}};
 
   t[(size_t)Resource::FP_ISSUE] = {
       [](const auto& w, auto p) { return get_thr_fp_issue(w, p[0]); },
