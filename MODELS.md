@@ -14,6 +14,8 @@ pandoc MODELS.md -o MODELS.pdf --pdf-engine=pdflatex
 2. [Load Queue](#load-queue)
 3. [Store Queue](#store-queue)
 4. [Commit Width](#commit-width)
+5. [Fetch Width](#fetch-width)
+6. [Rename Width](#rename-width)
 
 # Re-order Buffer
 ## Description
@@ -154,11 +156,56 @@ be written to registers/memory) in a single clock cycle.
 
 ## Model Overview
 
-The throughput bound imposed by the commit width is trivially the commit width itself, as it impacts all
-instructions processed by the CPU.
+The throughput bound imposed by the commit width is trivially the commit width itself, as it uniformly
+impacts all instructions processed by the CPU.
 
 ## gem5 Representation
 
 We configure the commit width of our core in gem5 by setting the already exposed `commitWidth` attribute
+of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# Fetch Width
+## Description
+A CPU's fetch width is the maximum number of instructions that can be fetched from the I-cache in a
+single clock cycle.
+
+## Model Overview
+
+The throughput bound imposed by the fetch width is trivially the fetch width itself, as it uniformly
+impacts all instructions processed by the CPU.
+
+## gem5 Representation
+
+We configure the fetch width of our core in gem5 by setting the already exposed `fetchWidth` attribute
+of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# Decode Width
+## Description
+A CPU's decode width is the maximum number of instructions that can be decoded into their corresponding
+micro-instructions in a single clock cycle. 
+
+## Model Overview
+
+The throughput bound imposed by the decode width is trivially the decode width itself, as it impacts all
+instructions processed by the CPU.
+
+## gem5 Representation
+
+We configure the decode width of our core in gem5 by setting the already exposed `decodeWidth` attribute
+of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+
+# Rename Width
+## Description
+A CPU's rename width is the maximum number of instructions that can be renamed (have their architectural
+registers be mapped to physical registers to eliminate false dependencies) in a single clock cycle.  
+
+## Model Overview
+
+The throughput bound imposed by the rename width is trivially the rename width itself, as it impacts all
+instructions processed by the CPU.
+
+## gem5 Representation
+
+We configure the rename width of our core in gem5 by setting the already exposed `renameWidth` attribute
 of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
 
