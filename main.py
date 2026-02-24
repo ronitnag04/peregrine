@@ -6,7 +6,7 @@ from evantrace.parser import Parser
 from evantrace.writer import Writer
 from evantrace.caches import Cache
 from evantrace.sim import Sim
-from evantrace.branch_predictor import SimpleBranchPredictor, TAGEBranchPredictor
+from evantrace.branch_predictor import LocalBranchPredictor, TAGEBranchPredictor
 
 def main():
     print("Hello from evantrace! Beginning simulation...")
@@ -32,7 +32,7 @@ def main():
         parent=l2cache
     )
 
-    branch_predictor = SimpleBranchPredictor(type="always_not_taken")
+    branch_predictor = LocalBranchPredictor(local_predictor_size=2048, local_ctr_bits=2)
     
     sim = Sim(trace=instructions, icache=icache, dcache=dcache, l2cache=l2cache, branch_predictor=branch_predictor)
     sim.run()

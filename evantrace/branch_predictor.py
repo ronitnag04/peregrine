@@ -38,6 +38,80 @@ class BranchPredictor(ABC):
         pass
 
 
+class LocalBranchPredictor(BranchPredictor):
+    """
+    Local (per-PC) branch predictor matching gem5 LocalBP.
+    Uses a table of saturating 2-bit counters indexed by PC. Prediction is the
+    MSB of the counter (taken if counter >= 2 for 2-bit). No history; update
+    is solely from the branch outcome.
+    Params match gem5: localPredictorSize (total bits), localCtrBits,
+    inst_shift_amt (PC shift, default 2 for 4-byte alignment).
+    """
+
+    def __init__(
+        self,
+        local_predictor_size: int = 2048,
+        local_ctr_bits: int = 2,
+        inst_shift_amt: int = 2,
+    ):
+        """
+        Initialize the local branch predictor.
+
+        Args:
+            local_predictor_size: Total size of the predictor in bits (number of
+                counters = local_predictor_size // local_ctr_bits). Must be power of 2.
+            local_ctr_bits: Bits per saturating counter (e.g. 2 for classic 2-bit).
+            inst_shift_amt: Number of bits to shift PC for indexing (e.g. 2 for 4-byte inst).
+        """
+        self.local_ctr_bits = local_ctr_bits
+        self.inst_shift_amt = inst_shift_amt
+        self.num_entries = local_predictor_size // local_ctr_bits
+        if self.num_entries & (self.num_entries - 1) != 0:
+            raise ValueError("local_predictor_size // local_ctr_bits must be a power of 2")
+        self.index_mask = self.num_entries - 1
+        self.max_counter = (1 << local_ctr_bits) - 1
+        # Saturating counters: predict taken when counter >= (1 << (local_ctr_bits - 1))
+        self.local_ctrs = np.zeros(self.num_entries, dtype=np.uint8)
+        self.total_predictions = 0
+        self.total_mispredictions = 0
+
+    def _get_local_index(self, inst_ptr: np.uint64) -> int:
+        """Index from PC, matching gem5 getLocalIndex: (branch_addr >> instShiftAmt) & indexMask."""
+        return int((inst_ptr >> self.inst_shift_amt) & self.index_mask)
+
+    def _get_prediction(self, count: int) -> bool:
+        """Predict from counter: MSB (taken if count >= 2 for 2-bit). Matches gem5 getPrediction."""
+        return bool(count >> (self.local_ctr_bits - 1))
+
+    def predict(self, inst_ptr: np.uint64, branch_type: Branch_Type) -> bool:
+        """
+        Predict using the local counter for this PC. Unconditional/indirect always taken.
+        """
+        self.total_predictions += 1
+        if branch_type == Branch_Type.direct_unconditional or branch_type == Branch_Type.indirect:
+            return True
+        idx = self._get_local_index(inst_ptr)
+        return self._get_prediction(int(self.local_ctrs[idx]))
+
+    def update(self, inst_ptr: np.uint64, branch_type: Branch_Type, predicted_taken: bool, actual_taken: bool):
+        """Update the local counter for this PC (saturating inc/dec). No history to restore."""
+        if branch_type == Branch_Type.direct_unconditional or branch_type == Branch_Type.indirect:
+            return
+        if predicted_taken != actual_taken:
+            self.total_mispredictions += 1
+        idx = self._get_local_index(inst_ptr)
+        c = int(self.local_ctrs[idx])
+        if actual_taken:
+            self.local_ctrs[idx] = np.uint8(min(c + 1, self.max_counter))
+        else:
+            self.local_ctrs[idx] = np.uint8(max(c - 1, 0))
+
+    def get_misprediction_rate(self) -> float:
+        if self.total_predictions == 0:
+            return 0.0
+        return self.total_mispredictions / self.total_predictions
+
+
 class SimpleBranchPredictor(BranchPredictor):
     """
     A simple branch predictor that predicts randomly (taken or not taken).
