@@ -183,7 +183,10 @@ impacts all instructions processed by the CPU.
 ## gem5 Representation
 
 We configure the writeback width of our core in gem5 by setting the already exposed `wbWidth` attribute
-of the `X86O3CPU` class in `configs/peregrine/peregrine.py`.
+of the `X86O3CPU` class in `configs/peregrine/peregrine.py`. Originally, this was independently parameterized, however
+initial simulations showed that simulations failed when the wbWidth was too small relative to the total issue width 
+(sum of the issue widths of each functional unit type). Therefore, we currently set wbWidth = total issue width, 
+so it can not be a bottleneck even when the CPU is hitting maximum issue throughput.
 
 # Fetch Width
 ## Description
