@@ -3,7 +3,7 @@ Entry point
 """
 import sys
 import csv
-
+import os
 from humanfriendly import parse_size
 
 from evantrace.parser import Parser
@@ -35,27 +35,26 @@ def process_row(row: dict[str, str], trace: list[Instruction]):
         f"{row['rob_size']}_"
         f"{row['simd_unit_issue_width']}_"
         f"{row['sq_entries']}_"
-        f"{row['stride_prefetcher_degree']}_"
-        f"{row['wb_width']}"
+        f"{row['stride_prefetcher_degree']}"
         f".csv"
     )
     
     writer = Writer(filename)
     
     l2cache = Cache(
-        associativity=4,
+        associativity=16,
         total_size=parse_size(row['l2_size']),
         read_latency=12
     )
     
     icache = Cache(
-        associativity=4,
+        associativity=8,
         total_size=parse_size(row['l1i_size']),
         read_latency=4
     )
     
     dcache = Cache(
-        associativity=4,
+        associativity=8,
         total_size=parse_size(row['l1d_size']),
         read_latency=4
     )
@@ -85,19 +84,14 @@ def main():
     trace_filename = sys.argv[1]
     parser = Parser(trace_filename)
     instructions = parser.parse()
-    
+
+    os.makedirs("output", exist_ok=True)
     sweep_filename = sys.argv[2]
-    try:
-        with open(sweep_filename, newline="", encoding="utf-8") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                process_row(row, instructions)
-    except FileNotFoundError:
-        print(f"Error: File '{sweep_filename}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        sys.exit(1)
+    assert os.path.exists(sweep_filename), f"File '{sweep_filename}' not found."
+    with open(sweep_filename, newline="", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            process_row(row, instructions)
 
 if __name__ == "__main__":
     main()

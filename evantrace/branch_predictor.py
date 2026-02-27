@@ -64,11 +64,11 @@ class LocalBranchPredictor(BranchPredictor):
             inst_shift_amt: Number of bits to shift PC for indexing (e.g. 2 for 4-byte inst).
         """
         self.local_ctr_bits = local_ctr_bits
-        self.inst_shift_amt = inst_shift_amt
+        self.inst_shift_amt = np.uint64(inst_shift_amt)
         self.num_entries = local_predictor_size // local_ctr_bits
         if self.num_entries & (self.num_entries - 1) != 0:
             raise ValueError("local_predictor_size // local_ctr_bits must be a power of 2")
-        self.index_mask = self.num_entries - 1
+        self.index_mask = np.uint64(self.num_entries - 1)
         self.max_counter = (1 << local_ctr_bits) - 1
         # Saturating counters: predict taken when counter >= (1 << (local_ctr_bits - 1))
         self.local_ctrs = np.zeros(self.num_entries, dtype=np.uint8)
