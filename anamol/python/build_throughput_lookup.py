@@ -113,8 +113,7 @@ class ThroughputLookupTable:
         if self._column_names is not None:
             return self._column_names
 
-        # Get the actual percentile values (1, 3, 5, ..., 99)
-        percentiles = np.linspace(1, 99, 50)
+        percentiles = utils.PERCENTILE_POINTS
 
         column_names = []
         for res_name in self.resource_order:
@@ -206,8 +205,11 @@ class ThroughputLookupTable:
             feature_vec = self.query(res_name, params)
 
             if feature_vec is None:
-                # Parameter combination not found - use nearest neighbor
-                feature_vec = self._find_nearest_neighbor(res_name, params)
+                raise ValueError(
+                    f"Config parameter {params} not found in lookup table for "
+                    f"resource '{res_name}'. "
+                    f"Available values: {sorted(self.lookup[res_name].keys())}"
+                )
 
             feature_vectors.append(feature_vec)
 
@@ -217,40 +219,6 @@ class ThroughputLookupTable:
         if as_dataframe:
             return pd.DataFrame([features], columns=self._get_column_names())
         return features
-
-    def _find_nearest_neighbor(
-        self, resource: str, target_params: Tuple[int, ...]
-    ) -> np.ndarray:
-        """
-        Find the nearest parameter combination in the lookup table.
-
-        Uses Euclidean distance in parameter space.
-        """
-        res_lookup = self.lookup[resource]
-        target = np.array(target_params, dtype=float)
-
-        min_dist = float("inf")
-        nearest_vec = None
-
-        for param_tuple, feature_vec in res_lookup.items():
-            params = np.array(param_tuple, dtype=float)
-            dist = np.linalg.norm(params - target)
-
-            if dist < min_dist:
-                min_dist = dist
-                nearest_vec = feature_vec
-
-        if nearest_vec is None:
-            raise RuntimeError(
-                f"No parameter combinations found for resource {resource}"
-            )
-
-        print(
-            f"  WARNING: {resource} params {target_params} not found, "
-            f"using nearest neighbor (dist={min_dist:.2f})"
-        )
-
-        return nearest_vec
 
     def save(self, filename: str):
         """Save the lookup table to a pickle file."""
@@ -283,7 +251,7 @@ class ThroughputLookupTable:
 
         print(f"✓ Lookup table loaded from: {path}")
         print(f"  Resources: {len(instance.resource_order)}")
-        print(f"  Feature dimension: {len(instance.resource_order) * 101}")
+        print(f"  Feature dimension: {len(instance.resource_order) * utils.FEATURES_PER_RESOURCE}")
         return instance
 
     def get_stats(self) -> Dict[str, int]:
@@ -350,7 +318,7 @@ def main():
 
     print(f"\n  Total parameter combinations:  {total_combos:6,d}")
     print(f"  Resources:                     {len(lookup_table.resource_order)}")
-    print(f"  Feature dimension per config:  {len(lookup_table.resource_order) * 101}")
+    print(f"  Feature dimension per config:  {len(lookup_table.resource_order) * utils.FEATURES_PER_RESOURCE}")
 
     # Save lookup table
     lookup_table.save(args.output)

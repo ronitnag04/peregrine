@@ -146,10 +146,10 @@ def get_config_scalar_features(config: models.Config) -> Dict[str, Any]:
     """
     Extract scalar and one-hot encoded features from a Config object.
 
-    Returns dictionary with 23 columns:
-    - 19 scalar microarchitecture parameters
-    - 2 one-hot encoded branch predictor columns
-    - 2 one-hot encoded prefetcher columns
+    Returns dictionary with 25 columns:
+    - 21 scalar microarchitecture parameters
+    - 2 one-hot encoded branch predictor columns (bp_is_simple, bp_is_tage)
+    - 2 one-hot encoded prefetcher columns (prefetcher_off, prefetcher_on)
     """
     features = {
         # Scalar parameters (19 columns)
@@ -196,10 +196,9 @@ def _add_cdf_features_to_dict(
         latencies, num_points=num_points
     )
 
-    percentiles = np.linspace(1, 99, num_points)
-    for j, p in enumerate(percentiles):
+    for j, p in enumerate(utils.PERCENTILE_POINTS[:num_points]):
         feature_dict[f"{prefix}_raw_p{int(p)}"] = cdf_raw[j]
-    for j, p in enumerate(percentiles):
+    for j, p in enumerate(utils.PERCENTILE_POINTS[:num_points]):
         feature_dict[f"{prefix}_weighted_p{int(p)}"] = cdf_weighted[j]
     feature_dict[f"{prefix}_mean"] = mean_val
 
@@ -340,25 +339,14 @@ def build_training_data(
     print(f"Loading lookup table from: {lookup_path}")
     lookup_table = ThroughputLookupTable.load(lookup_path)
 
-    # Generate training data
-    if len(configs) == 1:
-        training_data = generate_training_sample(
-            configs[0],
-            lookup_table,
-            trace_path,
-            window_size,
-            include_latency_features,
-            output_dir,
-        )
-    else:
-        training_data = generate_training_matrix(
-            configs,
-            lookup_table,
-            trace_path,
-            window_size,
-            include_latency_features,
-            output_dir,
-        )
+    training_data = generate_training_matrix(
+        configs,
+        lookup_table,
+        trace_path,
+        window_size,
+        include_latency_features,
+        output_dir,
+    )
 
     # Save if requested
     if output_path:
@@ -413,37 +401,25 @@ def compute_pipeline_stall_features(trace_file: str, window_size: int) -> pd.Dat
     print(f"  Total instructions: {num_instructions:,}")
     print(f"  Number of windows: {num_windows:,}")
 
-    # Create boolean masks for each stall type
-    is_isb = df["Instruction Sync"] == True
-    is_direct_cond = df["Branch Type"] == "direct_conditional"
-    is_direct_uncond = df["Branch Type"] == "direct_unconditional"
-    is_indirect = df["Branch Type"] == "indirect"
-
-    # Count occurrences per window for each stall type
-    stall_counts = {
-        "ISB": np.zeros(num_windows),
-        "DIRECT_COND": np.zeros(num_windows),
-        "DIRECT_UNCOND": np.zeros(num_windows),
-        "INDIRECT": np.zeros(num_windows),
+    # Boolean masks for each stall type
+    raw_masks = {
+        "ISB": (df["Instruction Sync"] == True).to_numpy(),
+        "DIRECT_COND": (df["Branch Type"] == "direct_conditional").to_numpy(),
+        "DIRECT_UNCOND": (df["Branch Type"] == "direct_unconditional").to_numpy(),
+        "INDIRECT": (df["Branch Type"] == "indirect").to_numpy(),
     }
 
-    for window_idx in range(num_windows):
-        start_idx = window_idx * window_size
-        end_idx = min(start_idx + window_size, num_instructions)
-
-        # Count each stall type in this window
-        stall_counts["ISB"][window_idx] = is_isb[start_idx:end_idx].sum()
-        stall_counts["DIRECT_COND"][window_idx] = is_direct_cond[
-            start_idx:end_idx
-        ].sum()
-        stall_counts["DIRECT_UNCOND"][window_idx] = is_direct_uncond[
-            start_idx:end_idx
-        ].sum()
-        stall_counts["INDIRECT"][window_idx] = is_indirect[start_idx:end_idx].sum()
+    # Count occurrences per window via reshape+sum (vectorized, no Python loop).
+    n_full = (num_instructions // window_size) * window_size
+    stall_counts = {}
+    for name, mask in raw_masks.items():
+        counts = mask[:n_full].reshape(-1, window_size).sum(axis=1).astype(float)
+        if n_full < num_instructions:  # partial last window
+            counts = np.append(counts, float(mask[n_full:].sum()))
+        stall_counts[name] = counts
 
     # Compute features for each stall type
     feature_dict = {}
-    percentiles = np.linspace(1, 99, 50)
 
     for stall_name, counts in stall_counts.items():
         total_count = int(counts.sum())
@@ -465,9 +441,9 @@ def compute_pipeline_stall_features(trace_file: str, window_size: int) -> pd.Dat
             )
 
         # Add to feature dictionary with proper column names
-        for i, p in enumerate(percentiles):
+        for i, p in enumerate(utils.PERCENTILE_POINTS):
             feature_dict[f"{stall_name}_raw_p{int(p)}"] = cdf_raw[i]
-        for i, p in enumerate(percentiles):
+        for i, p in enumerate(utils.PERCENTILE_POINTS):
             feature_dict[f"{stall_name}_weighted_p{int(p)}"] = cdf_weighted[i]
         feature_dict[f"{stall_name}_mean"] = mean_val
 
@@ -502,7 +478,7 @@ def generate_training_sample(
         - Throughput features (N resources x 101 each)
         - Pipeline stall features (4 stall types x 101 each)
         - ROB latency features (2334 features, if include_latency_features=True)
-        - Config scalar features including misprediction_percent (23 features)
+        - Config scalar features including misprediction_percent (25 features)
 
     Example:
         >>> import models
@@ -516,27 +492,10 @@ def generate_training_sample(
         ... )
         >>> print(sample.shape)  # (1, N_features)
     """
-    # Get throughput features from lookup table
-    throughput_features = lookup_table.get_config_features(config, as_dataframe=True)
-
-    # Get pipeline stall features from trace
-    stall_features = compute_pipeline_stall_features(trace_file, window_size)
-
-    # Combine all features into single row
-    combined_features = pd.concat([throughput_features, stall_features], axis=1)
-
-    # Add ROB latency features if requested
-    if include_latency_features:
-        latency_features = compute_rob_latency_features(output_dir)
-        combined_features = pd.concat([combined_features, latency_features], axis=1)
-
-    # Add config scalar features (19 scalars + 2 BP one-hot + 2 prefetcher one-hot = 23 cols)
-    # Note: misprediction_percent is included in these features
-    config_scalar_features = get_config_scalar_features(config)
-    for key, value in config_scalar_features.items():
-        combined_features[key] = value
-
-    return combined_features
+    return generate_training_matrix(
+        [config], lookup_table, trace_file, window_size,
+        include_latency_features, output_dir,
+    )
 
 
 def generate_training_matrix(
@@ -605,7 +564,7 @@ def generate_training_matrix(
         latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
         training_data = pd.concat([training_data, latency_df], axis=1)
 
-    # Add config scalar features for each configuration (23 columns per config)
+    # Add config scalar features for each configuration (25 columns per config)
     # Note: misprediction_percent is included in these features and can vary per config
     config_features_list = []
     for config in configs:
@@ -729,22 +688,12 @@ def main():
     print(f"Window size: {args.window_size}")
     print()
 
-    if len(configs) == 1:
-        # Single sample
-        training_data = generate_training_sample(
-            configs[0],
-            lookup_table,
-            args.trace,
-            args.window_size,
-        )
-    else:
-        # Multiple samples
-        training_data = generate_training_matrix(
-            configs,
-            lookup_table,
-            args.trace,
-            args.window_size,
-        )
+    training_data = generate_training_matrix(
+        configs,
+        lookup_table,
+        args.trace,
+        args.window_size,
+    )
 
     # Save to file (format based on extension)
     output_path = Path(args.output).resolve()
