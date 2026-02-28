@@ -12,8 +12,6 @@ endif
 
 # Python interpreter
 PYTHON := python3
-# Output directory to pass to the visualizer (defaults to 'output')
-THR_DIR ?= output
 
 SRC_DIR := src
 TESTS_DIR := tests
@@ -23,10 +21,20 @@ BUILD := build
 OBJDIR := $(BUILD)/obj
 
 # ---- Parameters ----
-WINDOW_SIZE ?= 400
+WINDOW_SIZE    ?= 400
+RANDOM_CONFIGS ?= 1000
 
 # Trace file
-TRACE_CSV ?= $(TRACE_DIR)/trace.csv
+TRACE_CSV   ?= $(TRACE_DIR)/trace.csv
+# Derive trace name from CSV stem (e.g. collatz_trace_with_latency)
+TRACE_NAME  ?= $(basename $(notdir $(TRACE_CSV)))
+# Per-trace output directory
+OUTPUT_DIR  := output/$(TRACE_NAME)
+# Throughput lookup table for this trace
+LOOKUP_FILE := $(OUTPUT_DIR)/throughput_lookup.pkl
+# Per-trace training data output
+TRAINING_DIR  ?= training
+TRAINING_OUT  := $(TRAINING_DIR)/$(TRACE_NAME).pkl
 
 # ---- Registry code generation ----
 # Edit registry.yaml to add/remove/enable/disable resources and params, then run make.
@@ -127,15 +135,44 @@ $(BUILD)/test_models: $(BUILD)/test_models_omp
 # ---- Run targets ----
 
 main.run: $(BUILD)/main
-	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE)
+	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE) -o $(OUTPUT_DIR)
+
+# Build throughput lookup table for a specific trace
+lookup.run:
+	$(PYTHON) python/build_throughput_lookup.py \
+		-i $(OUTPUT_DIR) -o $(LOOKUP_FILE)
+
+# Generate per-trace training data
+training.run:
+	@mkdir -p $(TRAINING_DIR)
+	$(PYTHON) python/gen_training_data.py \
+		--lookup $(LOOKUP_FILE) \
+		--trace $(TRACE_CSV) \
+		--window-size $(WINDOW_SIZE) \
+		--random-configs $(RANDOM_CONFIGS) \
+		-o $(TRAINING_OUT)
+
+# Full pipeline for one trace: simulate → lookup → training
+pipeline.run: main.run lookup.run training.run
+
+# Full pipeline for all *_with_latency.csv traces
+all_traces.run: $(BUILD)/main
+	@for csv in $(wildcard traces/*_with_latency.csv); do \
+		$(MAKE) pipeline.run TRACE_CSV=$$csv; \
+	done
+
+# Consolidate all per-trace training files into a single matrix
+consolidate.run:
+	$(PYTHON) python/consolidate_training.py \
+		-i $(TRAINING_DIR) -o $(TRAINING_DIR)/all_traces.pkl
 
 # Convenience run target for anamol
 anamol.run: main.run visualize.run
 	@true
 
-# Visualizer run target (passes --output-dir)
+# Visualizer run target
 visualize.run:
-	$(PYTHON) python/visualize.py --output-dir $(THR_DIR)
+	$(PYTHON) python/visualize.py --output-dir $(OUTPUT_DIR)
 
 parser.run: $(BUILD)/parser
 	$< $(TRACE_CSV)
@@ -186,4 +223,5 @@ clean-gen:
 
 .PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
-		benchmark anamol anamol.run visualize.run
+		benchmark anamol anamol.run visualize.run \
+		lookup.run training.run pipeline.run all_traces.run consolidate.run

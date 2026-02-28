@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <string>
 #include <vector>
 
 #include "instr.h"
@@ -59,7 +60,7 @@ using PerResThrVecs =
 PerResThrVecs get_throughput(std::vector<Instr> instr_trace,
                              int window_size = 400);
 
-void export_throughputs(PerResThrVecs PER_RES_THR_VECS);
+void export_throughputs(PerResThrVecs PER_RES_THR_VECS, const std::string& output_dir);
 
 ////////////////////////////////////////////////////////////////////////////
 // ROB Latency Analysis
@@ -75,7 +76,8 @@ struct RobLatencyData {
 std::vector<RobLatencyData> get_rob_latency_analysis(
     const std::vector<Instr>& instr_trace);
 
-void export_latency_analysis(const std::vector<RobLatencyData>& latency_data);
+void export_latency_analysis(const std::vector<RobLatencyData>& latency_data,
+                             const std::string& output_dir);
 
 }  // namespace analytical
 

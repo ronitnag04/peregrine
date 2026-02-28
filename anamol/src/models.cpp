@@ -760,9 +760,9 @@ static void write_npy_2d_float64(const std::string& filename, size_t rows,
   ofs.close();
 }
 
-void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
+void export_throughputs(PerResThrVecs PER_RES_THR_VECS, const std::string& output_dir) {
   // Ensure output directory exists.
-  std::system("mkdir -p output");
+  std::system(("mkdir -p " + output_dir).c_str());
 
   for (const auto& entry : RESOURCE_REGISTRY) {
     if (!entry.enabled) continue;
@@ -804,18 +804,19 @@ void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
     }
 
     // Filename uses the canonical resource name from the registry.
-    std::string fname = std::string("output/thr_") + entry.name + ".npy";
+    std::string fname = output_dir + "/thr_" + entry.name + ".npy";
     write_npy_2d_float64(fname, rows, cols, array);
   }
 }
 
-void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
+void export_latency_analysis(const std::vector<RobLatencyData>& latency_data,
+                             const std::string& output_dir) {
   if (latency_data.empty()) return;
 
-  std::cout << "\nExporting latency analysis to ./output ...\n";
+  std::cout << "\nExporting latency analysis to " << output_dir << " ...\n";
 
   // Ensure output directory exists
-  std::system("mkdir -p output");
+  std::system(("mkdir -p " + output_dir).c_str());
 
   size_t num_rob_sizes = latency_data.size();
   size_t num_instructions = latency_data[0].issue_latencies.size();
@@ -827,7 +828,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
       thr_data[i * 2 + 0] = latency_data[i].rob_size;
       thr_data[i * 2 + 1] = latency_data[i].overall_throughput;
     }
-    write_npy_2d_float64("output/rob_latency_overall_thr.npy", num_rob_sizes, 2,
+    write_npy_2d_float64(output_dir + "/rob_latency_overall_thr.npy", num_rob_sizes, 2,
                          thr_data);
     std::cout << "  Wrote rob_latency_overall_thr.npy (" << num_rob_sizes
               << " x 2)\n";
@@ -842,7 +843,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
             latency_data[i].issue_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_issue.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_issue.npy", num_rob_sizes,
                          num_instructions, issue_data);
     std::cout << "  Wrote rob_latency_issue.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
@@ -857,7 +858,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
             latency_data[i].commit_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_commit.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_commit.npy", num_rob_sizes,
                          num_instructions, commit_data);
     std::cout << "  Wrote rob_latency_commit.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
@@ -872,7 +873,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
         exec_data[i * num_instructions + j] = latency_data[i].exec_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_exec.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_exec.npy", num_rob_sizes,
                          num_instructions, exec_data);
     std::cout << "  Wrote rob_latency_exec.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
