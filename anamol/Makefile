@@ -28,9 +28,10 @@ TRACE_CSV ?= $(TRACE_DIR)/trace.csv
 # ---- Registry code generation ----
 # Edit registry.yaml to add/remove/enable/disable resources and params, then run make.
 REGISTRY_CONFIG ?= registry.yaml
-GENERATED_HEADERS := include/resources_gen.h include/params_gen.h include/resource_registry.h
+GENERATED_HEADERS := include/resources_gen.h include/params_gen.h include/resource_registry.h include/models_decl_gen.h
+GENERATED_PY := python/config_gen.py
 
-$(GENERATED_HEADERS): $(REGISTRY_CONFIG) python/gen_registry.py
+$(GENERATED_HEADERS) $(GENERATED_PY): $(REGISTRY_CONFIG) python/gen_registry.py
 	$(PYTHON) python/gen_registry.py --config $(REGISTRY_CONFIG)
 
 # ---- Common sources ----
@@ -184,7 +185,7 @@ clean:
 	rm -rf $(BUILD)
 
 clean-gen:
-	rm -f $(GENERATED_HEADERS)
+	rm -f $(GENERATED_HEADERS) $(GENERATED_PY)
 
 .PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
