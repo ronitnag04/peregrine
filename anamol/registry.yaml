@@ -59,18 +59,11 @@ params:
     default: 4
     enabled: true
 
-  - name: alu_mul_issue_width
+  - name: alu_mult_div_issue_width
     min: 1
     max: 8
     step: base2
     default: 2
-    enabled: true
-
-  - name: alu_div_issue_width
-    min: 1
-    max: 8
-    step: base2
-    default: 1
     enabled: true
 
   - name: fp_issue_width
@@ -199,12 +192,8 @@ resources:
     params: [alu_issue_width]
     enabled: true
 
-  - name: alu_mul_issue
-    params: [alu_mul_issue_width]
-    enabled: true
-
-  - name: alu_div_issue
-    params: [alu_div_issue_width]
+  - name: alu_mult_div_issue
+    params: [alu_mult_div_issue_width]
     enabled: true
 
   - name: fp_issue

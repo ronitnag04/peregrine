@@ -42,18 +42,11 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         ParamSweep{ParamType::ALU_ISSUE_WIDTH},
     },
     {
-        Resource::ALU_MUL_ISSUE,
-        "alu_mul_issue",
+        Resource::ALU_MULT_DIV_ISSUE,
+        "alu_mult_div_issue",
         true,
-        [](const auto& w, const auto& p) { return get_thr_alu_mul_issue(w, p[0]); },
-        ParamSweep{ParamType::ALU_MUL_ISSUE_WIDTH},
-    },
-    {
-        Resource::ALU_DIV_ISSUE,
-        "alu_div_issue",
-        true,
-        [](const auto& w, const auto& p) { return get_thr_alu_div_issue(w, p[0]); },
-        ParamSweep{ParamType::ALU_DIV_ISSUE_WIDTH},
+        [](const auto& w, const auto& p) { return get_thr_alu_mult_div_issue(w, p[0]); },
+        ParamSweep{ParamType::ALU_MULT_DIV_ISSUE_WIDTH},
     },
     {
         Resource::FP_ISSUE,

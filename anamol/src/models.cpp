@@ -271,43 +271,22 @@ double get_thr_alu_issue(const vector<Instr>& window,
   return k / cycles_needed;
 }
 
-// 4a. ALU Multiply Issue Width Throughput
-double get_thr_alu_mul_issue(const vector<Instr>& window,
-                             uint16_t alu_mul_issue_width) {
-  // Count ALU multiply instructions in the window
-  int n_mul = 0;
+// 4a. ALU Multiply/Divide Issue Width Throughput
+double get_thr_alu_mult_div_issue(const vector<Instr>& window,
+                                  uint16_t alu_mult_div_issue_width) {
+  // Count ALU multiply and divide instructions in the window
+  int n_mult_div = 0;
   for (const auto& instr : window) {
-    n_mul += instr.is_mul;
+    n_mult_div += instr.is_mul + instr.is_div;
   }
 
-  // Handle edge case: no MUL instructions
-  if (n_mul == 0) return window.size();
+  // Handle edge case: no MUL/DIV instructions
+  if (n_mult_div == 0) return window.size();
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_mul_issue_width == 0) return window.size();
+  if (alu_mult_div_issue_width == 0) return window.size();
   uint32_t k = window.size();
-  double cycles_needed = (double)n_mul / alu_mul_issue_width;
-  if (cycles_needed < 1.0) cycles_needed = 1.0;
-
-  return k / cycles_needed;
-}
-
-// 4b. ALU Divide Issue Width Throughput
-double get_thr_alu_div_issue(const vector<Instr>& window,
-                             uint16_t alu_div_issue_width) {
-  // Count ALU divide instructions in the window
-  int n_div = 0;
-  for (const auto& instr : window) {
-    n_div += instr.is_div;
-  }
-
-  // Handle edge case: no DIV instructions
-  if (n_div == 0) return window.size();
-
-  // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_div_issue_width == 0) return window.size();
-  uint32_t k = window.size();
-  double cycles_needed = (double)n_div / alu_div_issue_width;
+  double cycles_needed = (double)n_mult_div / alu_mult_div_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
 
   return k / cycles_needed;
