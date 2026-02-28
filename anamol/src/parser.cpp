@@ -152,6 +152,7 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
   result.is_mul = (opcat & OPCAT_MUL) != 0;
   result.is_div = (opcat & OPCAT_DIV) != 0;
   result.is_fp = (opcat & OPCAT_FP) != 0;
+  result.is_fp_mult_div = (opcat & OPCAT_FP_MULT_DIV) != 0;
 
   result.is_load = !inst.read_addresses.empty();
   result.is_store = !inst.write_addresses.empty();

@@ -73,6 +73,13 @@ params:
     default: 4
     enabled: true
 
+  - name: fp_mult_div_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 2
+    enabled: true
+
   - name: ls_issue_width
     min: 1
     max: 8
@@ -198,6 +205,10 @@ resources:
 
   - name: fp_issue
     params: [fp_issue_width]
+    enabled: true
+
+  - name: fp_mult_div_issue
+    params: [fp_mult_div_issue_width]
     enabled: true
 
   - name: ls_issue

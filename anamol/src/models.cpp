@@ -312,6 +312,27 @@ double get_thr_fp_issue(const vector<Instr>& window, uint16_t fp_issue_width) {
   return k / cycles_needed;
 }
 
+// 5a. FP Multiply/Divide Issue Width Throughput
+double get_thr_fp_mult_div_issue(const vector<Instr>& window,
+                                 uint16_t fp_mult_div_issue_width) {
+  // Count FP multiply/divide/sqrt/FMA instructions in the window
+  int n_fp_mult_div = 0;
+  for (const auto& instr : window) {
+    n_fp_mult_div += instr.is_fp_mult_div;
+  }
+
+  // Handle edge case: no FP mult/div instructions
+  if (n_fp_mult_div == 0) return window.size();
+
+  // Protect against zero issue width and ensure at least 1 cycle
+  if (fp_mult_div_issue_width == 0) return window.size();
+  uint32_t k = window.size();
+  double cycles_needed = (double)n_fp_mult_div / fp_mult_div_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
+  return k / cycles_needed;
+}
+
 // 6. Load-Store Issue Width Throughput
 double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
   // Count Load/Store instructions in the window

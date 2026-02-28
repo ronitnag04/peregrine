@@ -29,7 +29,8 @@ enum OpcodeCategory : uint8_t {
   OPCAT_FP = 0x08,
   OPCAT_LOAD = 0x10,
   OPCAT_STORE = 0x20,
-  OPCAT_LOAD_STORE = 0x30,  // OPCAT_LOAD | OPCAT_STORE
+  OPCAT_LOAD_STORE = 0x30,   // OPCAT_LOAD | OPCAT_STORE
+  OPCAT_FP_MULT_DIV = 0x40,  // FP multiply, divide, sqrt, FMA (slow FP units)
 };
 
 // ---------------------------------------------------------------------------
@@ -392,27 +393,27 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"SUBSD", OPCAT_FP},
       {"SUBPS", OPCAT_FP},
       {"SUBPD", OPCAT_FP},
-      {"MULSS", OPCAT_FP},
-      {"MULSD", OPCAT_FP},
-      {"MULPS", OPCAT_FP},
-      {"MULPD", OPCAT_FP},
-      {"DIVSS", OPCAT_FP},
-      {"DIVSD", OPCAT_FP},
-      {"DIVPS", OPCAT_FP},
-      {"DIVPD", OPCAT_FP},
-      {"SQRTSS", OPCAT_FP},
-      {"SQRTSD", OPCAT_FP},
-      {"SQRTPS", OPCAT_FP},
-      {"SQRTPD", OPCAT_FP},
-      {"RSQRTSS", OPCAT_FP},
-      {"RSQRTPS", OPCAT_FP},
-      {"RCPSS", OPCAT_FP},
-      {"RCPPS", OPCAT_FP},
+      {"MULSS", OPCAT_FP_MULT_DIV},
+      {"MULSD", OPCAT_FP_MULT_DIV},
+      {"MULPS", OPCAT_FP_MULT_DIV},
+      {"MULPD", OPCAT_FP_MULT_DIV},
+      {"DIVSS", OPCAT_FP_MULT_DIV},
+      {"DIVSD", OPCAT_FP_MULT_DIV},
+      {"DIVPS", OPCAT_FP_MULT_DIV},
+      {"DIVPD", OPCAT_FP_MULT_DIV},
+      {"SQRTSS", OPCAT_FP_MULT_DIV},
+      {"SQRTSD", OPCAT_FP_MULT_DIV},
+      {"SQRTPS", OPCAT_FP_MULT_DIV},
+      {"SQRTPD", OPCAT_FP_MULT_DIV},
+      {"RSQRTSS", OPCAT_FP_MULT_DIV},
+      {"RSQRTPS", OPCAT_FP_MULT_DIV},
+      {"RCPSS", OPCAT_FP_MULT_DIV},
+      {"RCPPS", OPCAT_FP_MULT_DIV},
 
       // FMA
-      {"VFMADD132PS", OPCAT_FP},
-      {"VFMADD213PS", OPCAT_FP},
-      {"VFMADD231PS", OPCAT_FP},
+      {"VFMADD132PS", OPCAT_FP_MULT_DIV},
+      {"VFMADD213PS", OPCAT_FP_MULT_DIV},
+      {"VFMADD231PS", OPCAT_FP_MULT_DIV},
 
       // FP compare / logic
       {"CMPSS", OPCAT_FP},
@@ -512,6 +513,9 @@ inline bool opcode_is_div(const std::string& op) {
 }
 inline bool opcode_is_fp(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_FP;
+}
+inline bool opcode_is_fp_mult_div(const std::string& op) {
+  return get_opcode_categories(op) & OPCAT_FP_MULT_DIV;
 }
 inline bool opcode_is_load(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_LOAD;

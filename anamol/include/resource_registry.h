@@ -56,6 +56,13 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         ParamSweep{ParamType::FP_ISSUE_WIDTH},
     },
     {
+        Resource::FP_MULT_DIV_ISSUE,
+        "fp_mult_div_issue",
+        true,
+        [](const auto& w, const auto& p) { return get_thr_fp_mult_div_issue(w, p[0]); },
+        ParamSweep{ParamType::FP_MULT_DIV_ISSUE_WIDTH},
+    },
+    {
         Resource::LS_ISSUE,
         "ls_issue",
         true,

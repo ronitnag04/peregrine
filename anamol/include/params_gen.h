@@ -27,6 +27,7 @@ enum class ParamType : uint8_t {
   ALU_ISSUE_WIDTH,
   ALU_MULT_DIV_ISSUE_WIDTH,
   FP_ISSUE_WIDTH,
+  FP_MULT_DIV_ISSUE_WIDTH,
   LS_ISSUE_WIDTH,
   NUM_LS_PIPES,
   NUM_LOAD_PIPES,
@@ -56,6 +57,7 @@ inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES =
     {1, 8, PARAM_STEP},  // ALU_ISSUE_WIDTH
     {1, 8, PARAM_STEP},  // ALU_MULT_DIV_ISSUE_WIDTH
     {1, 8, PARAM_STEP},  // FP_ISSUE_WIDTH
+    {1, 8, PARAM_STEP},  // FP_MULT_DIV_ISSUE_WIDTH
     {1, 8, PARAM_STEP},  // LS_ISSUE_WIDTH
     {1, 8, PARAM_STEP},  // NUM_LS_PIPES
     {0, 8, PARAM_STEP},  // NUM_LOAD_PIPES

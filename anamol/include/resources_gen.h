@@ -15,6 +15,7 @@ enum class Resource : uint8_t {
   ALU_ISSUE,
   ALU_MULT_DIV_ISSUE,
   FP_ISSUE,
+  FP_MULT_DIV_ISSUE,
   LS_ISSUE,
   LOAD_LS_PIPES_LOWER,
   LOAD_LS_PIPES_UPPER,
