@@ -104,10 +104,12 @@ def sample_random_config() -> models.Config:
     Returns:
         Random Config with all parameters independently sampled
     """
-    config_dict = {
-        p.name: int(np.random.randint(p.min_val, p.max_val + 1))
-        for p in registry.ENABLED_PARAMS
-    }
+    config_dict = {}
+    for p in registry.ENABLED_PARAMS:
+        if isinstance(p.step, list):
+            config_dict[p.name] = int(np.random.choice(p.step))
+        else:
+            config_dict[p.name] = int(np.random.randint(p.min_val, p.max_val + 1))
     return models.Config(**config_dict)
 
 
@@ -129,7 +131,7 @@ def get_config_scalar_features(config: models.Config) -> Dict[str, Any]:
     features["bp_is_simple"] = 1 if config.branch_predictor == 0 else 0
     features["bp_is_tage"] = 1 if config.branch_predictor == 1 else 0
     features["prefetcher_off"] = 1 if config.l1d_stride_prefetch == 0 else 0
-    features["prefetcher_on"] = 1 if config.l1d_stride_prefetch == 1 else 0
+    features["prefetcher_on"] = 1 if config.l1d_stride_prefetch != 0 else 0
     return features
 
 

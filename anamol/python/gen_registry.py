@@ -72,6 +72,7 @@ def gen_params_h(params: list, out_dir: Path) -> None:
     lines.append("#include <array>")
     lines.append("#include <cstddef>")
     lines.append("#include <cstdint>")
+    lines.append("#include <span>")
     lines.append("#include <vector>")
     lines.append("")
     lines.append('#include "param_types.h"  // StepType, ParamRange')
@@ -92,13 +93,35 @@ def gen_params_h(params: list, out_dir: Path) -> None:
     lines.append("};")
     lines.append("")
 
+    # Static arrays for discrete params (non-owning; params_gen.h has static storage)
+    discrete_params = [p for p in params if isinstance(p["step"], list)]
+    if discrete_params:
+        lines.append("namespace detail {")
+        for p in discrete_params:
+            upper_name = snake_to_upper(p["name"])
+            vals_str = ", ".join(str(v) for v in p["step"])
+            lines.append(f"inline constexpr uint16_t {upper_name}_VALS[] = {{{vals_str}}};")
+        lines.append("}  // namespace detail")
+        lines.append("")
+
     # PARAM_RANGES array
     lines.append("inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES = {{")
     step_map = {"base2": "PARAM_STEP", "linear": "StepType::LINEAR"}
     for p in params:
-        step = step_map[p["step"]]
         comment = snake_to_upper(p["name"])
-        lines.append(f"    {{{p['min']}, {p['max']}, {step}}},  // {comment}")
+        if isinstance(p["step"], list):
+            upper_name = snake_to_upper(p["name"])
+            lines.append(
+                f"    ParamRange{{std::span<const uint16_t>{{detail::{upper_name}_VALS}}}},  // {comment}"
+            )
+        else:
+            step = step_map.get(p["step"])
+            if step is None:
+                raise ValueError(
+                    f"Unknown step type '{p['step']}' for param '{p['name']}'. "
+                    "Expected 'base2', 'linear', or a list."
+                )
+            lines.append(f"    {{{p['min']}, {p['max']}, {step}}},  // {comment}")
     lines.append("}};")
     lines.append("")
 

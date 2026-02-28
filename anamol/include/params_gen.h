@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "param_types.h"  // StepType, ParamRange
@@ -44,6 +45,10 @@ enum class ParamType : uint8_t {
   COUNT
 };
 
+namespace detail {
+inline constexpr uint16_t L1D_STRIDE_PREFETCH_VALS[] = {0, 4};
+}  // namespace detail
+
 inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES = {{
     {1, 1024, PARAM_STEP},  // ROB_SIZE
     {1, 12, PARAM_STEP},  // COMMIT_WIDTH
@@ -66,7 +71,7 @@ inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES =
     {16, 256, PARAM_STEP},  // L1D_CACHE_KB
     {16, 256, PARAM_STEP},  // L1I_CACHE_KB
     {512, 4096, PARAM_STEP},  // L2_CACHE_KB
-    {0, 1, StepType::LINEAR},  // L1D_STRIDE_PREFETCH
+    ParamRange{std::span<const uint16_t>{detail::L1D_STRIDE_PREFETCH_VALS}},  // L1D_STRIDE_PREFETCH
 }};
 
 inline constexpr ParamRange get_param_range(ParamType type) {

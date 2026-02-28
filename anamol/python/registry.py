@@ -30,7 +30,7 @@ class ParamDef:
     name: str       # snake_case — matches Config field name
     min_val: int
     max_val: int
-    step: str       # "base2" or "linear"
+    step: str | list[int]  # "base2", "linear", or explicit list e.g. [0, 4]
     default: int
     enabled: bool
 
@@ -46,17 +46,28 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
 
-    params = [
-        ParamDef(
-            name=p["name"],
-            min_val=p["min"],
-            max_val=p["max"],
-            step=p["step"],
-            default=p["default"],
-            enabled=p.get("enabled", True),
-        )
-        for p in data.get("params", [])
-    ]
+    params = []
+    for p in data.get("params", []):
+        step = p["step"]
+        if isinstance(step, list):
+            vals = list(step)
+            params.append(ParamDef(
+                name=p["name"],
+                min_val=min(vals),
+                max_val=max(vals),
+                step=vals,
+                default=p["default"],
+                enabled=p.get("enabled", True),
+            ))
+        else:
+            params.append(ParamDef(
+                name=p["name"],
+                min_val=p["min"],
+                max_val=p["max"],
+                step=step,
+                default=p["default"],
+                enabled=p.get("enabled", True),
+            ))
 
     resources = [
         ResourceDef(

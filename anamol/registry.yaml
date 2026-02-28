@@ -21,7 +21,8 @@
 params:
   # C++ enum name = UPPER_CASE(name), e.g. rob_size -> ROB_SIZE
   # Python Config field name = name
-  # step: "base2" or "linear"
+  # step: "base2", "linear", or a discrete list, e.g. [0, 4]
+  #   discrete: min/max fields are not needed; values are swept/sampled from the list
 
   - name: rob_size
     min: 1
@@ -171,10 +172,8 @@ params:
     enabled: true
 
   - name: l1d_stride_prefetch
-    min: 0
-    max: 1
-    step: linear
-    default: 1
+    step: [0, 4]
+    default: 0
     enabled: true
 
 resources:
