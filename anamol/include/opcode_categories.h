@@ -7,13 +7,16 @@
 
 // ---------------------------------------------------------------------------
 // Opcode category bitmask flags
-//   ALU       - integer arithmetic / logic / shift / bit-manipulation
-//   MUL       - integer multiply
-//   DIV       - integer divide
-//   FP        - floating-point and SIMD / vector
-//   LOAD      - reads from memory (inherently a load)
-//   STORE     - writes to memory (inherently a store)
-//   LOAD_STORE - reads AND writes memory (atomic RMW / string move)
+//   ALU          - integer arithmetic / logic / shift / bit-manipulation
+//   ALU_MULT_DIV - integer multiply and divide (disjoint from ALU)
+//   FP           - floating-point and SIMD / vector (fast FP ports)
+//   FP_MULT_DIV  - FP multiply, divide, sqrt, FMA (slow FP ports, disjoint from FP)
+//   LOAD         - reads from memory (inherently a load)
+//   STORE        - writes to memory (inherently a store)
+//   LOAD_STORE   - reads AND writes memory (atomic RMW / string move)
+//
+// Disjointness: an instruction belongs to exactly one of {ALU, ALU_MULT_DIV}
+// and exactly one of {FP, FP_MULT_DIV} (or neither).
 //
 // Note: LOAD and STORE are set only for opcodes that are *inherently*
 // load or store operations (non-temporal, string, gather/scatter, atomics).
@@ -24,8 +27,7 @@
 enum OpcodeCategory : uint8_t {
   OPCAT_NONE = 0x00,
   OPCAT_ALU = 0x01,
-  OPCAT_MUL = 0x02,
-  OPCAT_DIV = 0x04,
+  OPCAT_ALU_MULT_DIV = 0x02,  // integer multiply and divide (disjoint from ALU)
   OPCAT_FP = 0x08,
   OPCAT_LOAD = 0x10,
   OPCAT_STORE = 0x20,
@@ -181,17 +183,13 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"JRCXZ", OPCAT_ALU},
 
       // ===================================================================
-      //  MUL  –  integer multiply
+      //  ALU_MULT_DIV  –  integer multiply and divide (disjoint from ALU)
       // ===================================================================
-      {"MUL", OPCAT_MUL},
-      {"IMUL", OPCAT_MUL},
-      {"MULX", OPCAT_MUL},
-
-      // ===================================================================
-      //  DIV  –  integer divide
-      // ===================================================================
-      {"DIV", OPCAT_DIV},
-      {"IDIV", OPCAT_DIV},
+      {"MUL", OPCAT_ALU_MULT_DIV},
+      {"IMUL", OPCAT_ALU_MULT_DIV},
+      {"MULX", OPCAT_ALU_MULT_DIV},
+      {"DIV", OPCAT_ALU_MULT_DIV},
+      {"IDIV", OPCAT_ALU_MULT_DIV},
 
       // ===================================================================
       //  FP  –  floating-point scalar, SSE/AVX vector (integer and float)
@@ -505,11 +503,8 @@ inline uint8_t get_opcode_categories(const std::string& opcode) {
 inline bool opcode_is_alu(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_ALU;
 }
-inline bool opcode_is_mul(const std::string& op) {
-  return get_opcode_categories(op) & OPCAT_MUL;
-}
-inline bool opcode_is_div(const std::string& op) {
-  return get_opcode_categories(op) & OPCAT_DIV;
+inline bool opcode_is_alu_mult_div(const std::string& op) {
+  return get_opcode_categories(op) & OPCAT_ALU_MULT_DIV;
 }
 inline bool opcode_is_fp(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_FP;

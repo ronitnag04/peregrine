@@ -277,7 +277,7 @@ double get_thr_alu_mult_div_issue(const vector<Instr>& window,
   // Count ALU multiply and divide instructions in the window
   int n_mult_div = 0;
   for (const auto& instr : window) {
-    n_mult_div += instr.is_mul + instr.is_div;
+    n_mult_div += instr.is_alu_mult_div;
   }
 
   // Handle edge case: no MUL/DIV instructions

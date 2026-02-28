@@ -149,8 +149,7 @@ Instr convert_to_instr(const tracing::instr_trace_t& inst, instr_id_t id) {
   // Determine instruction type from opcode lookup table
   uint8_t opcat = get_opcode_categories(inst.opcode);
   result.is_alu = (opcat & OPCAT_ALU) != 0;
-  result.is_mul = (opcat & OPCAT_MUL) != 0;
-  result.is_div = (opcat & OPCAT_DIV) != 0;
+  result.is_alu_mult_div = (opcat & OPCAT_ALU_MULT_DIV) != 0;
   result.is_fp = (opcat & OPCAT_FP) != 0;
   result.is_fp_mult_div = (opcat & OPCAT_FP_MULT_DIV) != 0;
 

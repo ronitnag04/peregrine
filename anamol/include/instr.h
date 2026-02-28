@@ -48,8 +48,7 @@ struct Instr {
   latency_t fetch_latency;
 
   bool is_alu;
-  bool is_mul;
-  bool is_div;
+  bool is_alu_mult_div;
   bool is_fp;
   bool is_fp_mult_div;
   bool is_load;
