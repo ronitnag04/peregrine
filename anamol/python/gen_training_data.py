@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Local imports
+import registry
 import utils
 import models
 from build_throughput_lookup import ThroughputLookupTable
@@ -97,48 +98,16 @@ def sample_random_config() -> models.Config:
     """
     Sample a random microarchitecture configuration following Concorde's approach.
 
-    Independently samples each parameter from its valid range (as documented in Config).
+    Independently samples each enabled parameter from its range in registry.yaml.
     This creates a massive microarchitecture space (~2x10^23 as noted in Concorde paper).
 
     Returns:
         Random Config with all parameters independently sampled
-
-    Example:
-        >>> from gen_training_data import sample_random_config
-        >>> config = sample_random_config()
-        >>> print(config.rob_size, config.commit_width)  # e.g., 512 8
     """
-    # Parameter ranges from models.Config comments
-    param_ranges = {
-        "rob_size": (1, 1024),
-        "commit_width": (1, 12),
-        "load_queue_size": (1, 256),
-        "store_queue_size": (1, 256),
-        "alu_issue_width": (1, 8),
-        "alu_mul_issue_width": (1, 8),
-        "alu_div_issue_width": (1, 8),
-        "fp_issue_width": (1, 8),
-        "ls_issue_width": (1, 8),
-        "num_ls_pipes": (1, 8),
-        "num_load_pipes": (0, 8),
-        "fetch_width": (1, 12),
-        "decode_width": (1, 12),
-        "rename_width": (1, 12),
-        "num_fetch_buffers": (1, 8),
-        "max_icache_fills": (1, 32),
-        "branch_predictor": (0, 1),  # Binary: 0=simple, 1=tage
-        "misprediction_percent": (0, 100),
-        "l1d_cache_kb": (16, 256),
-        "l1i_cache_kb": (16, 256),
-        "l2_cache_kb": (512, 4096),
-        "l1d_stride_prefetch": (0, 1),  # Binary: 0=off, 1=on
+    config_dict = {
+        p.name: int(np.random.randint(p.min_val, p.max_val + 1))
+        for p in registry.ENABLED_PARAMS
     }
-
-    # Sample each parameter independently
-    config_dict = {}
-    for param_name, (min_val, max_val) in param_ranges.items():
-        config_dict[param_name] = np.random.randint(min_val, max_val + 1)
-
     return models.Config(**config_dict)
 
 
@@ -151,36 +120,16 @@ def get_config_scalar_features(config: models.Config) -> Dict[str, Any]:
     - 2 one-hot encoded branch predictor columns (bp_is_simple, bp_is_tage)
     - 2 one-hot encoded prefetcher columns (prefetcher_off, prefetcher_on)
     """
+    # Scalar columns: one per enabled param, name matches Config field name.
     features = {
-        # Scalar parameters (19 columns)
-        "rob_size": config.rob_size,
-        "commit_width": config.commit_width,
-        "load_queue_size": config.load_queue_size,
-        "store_queue_size": config.store_queue_size,
-        "alu_issue_width": config.alu_issue_width,
-        "alu_mul_issue_width": config.alu_mul_issue_width,
-        "alu_div_issue_width": config.alu_div_issue_width,
-        "fp_issue_width": config.fp_issue_width,
-        "load_store_issue_width": config.ls_issue_width,
-        "num_load_store_pipes": config.num_ls_pipes,
-        "num_load_pipes": config.num_load_pipes,
-        "fetch_width": config.fetch_width,
-        "decode_width": config.decode_width,
-        "rename_width": config.rename_width,
-        "num_fetch_buffers": config.num_fetch_buffers,
-        "max_icache_fills": config.max_icache_fills,
-        "percent_mispred_simple_bp": config.misprediction_percent,
-        "l1d_cache_size_kb": config.l1d_cache_kb,
-        "l1i_cache_size_kb": config.l1i_cache_kb,
-        "l2_cache_size_kb": config.l2_cache_kb,
-        "l1d_stride_prefetcher_degree": config.l1d_stride_prefetch,
-        # Branch predictor one-hot (2 columns)
-        "bp_is_simple": 1 if config.branch_predictor == 0 else 0,
-        "bp_is_tage": 1 if config.branch_predictor == 1 else 0,
-        # Prefetcher one-hot (2 columns)
-        "prefetcher_off": 1 if config.l1d_stride_prefetch == 0 else 0,
-        "prefetcher_on": 1 if config.l1d_stride_prefetch == 1 else 0,
+        p.name: getattr(config, p.name)
+        for p in registry.ENABLED_PARAMS
     }
+    # One-hot encodings for categorical params
+    features["bp_is_simple"] = 1 if config.branch_predictor == 0 else 0
+    features["bp_is_tage"] = 1 if config.branch_predictor == 1 else 0
+    features["prefetcher_off"] = 1 if config.l1d_stride_prefetch == 0 else 0
+    features["prefetcher_on"] = 1 if config.l1d_stride_prefetch == 1 else 0
     return features
 
 

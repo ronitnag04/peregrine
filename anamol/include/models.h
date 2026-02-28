@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "instr.h"
-#include "params.h"
-#include "resources.h"
+#include "params_gen.h"    // ParamType, ParamSweep, PARAM_RANGES (generated)
+#include "resources_gen.h" // Resource enum (generated)
 
 namespace analytical {
 
@@ -45,11 +45,13 @@ double get_thr_fp_issue(const std::vector<Instr>& window,
 double get_thr_ls_issue(const std::vector<Instr>& window,
                         uint16_t ls_issue_width);
 // 7. Load/Load-Store Pipes Lower Bound Throughput
-double get_thr_ls_pipes_lower(const std::vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes);
+double get_thr_load_ls_pipes_lower(const std::vector<Instr>& window,
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes);
 // 8. Load/Load-Store Pipes Upper Bound Throughput
-double get_thr_ls_pipes_upper(const std::vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes);
+double get_thr_load_ls_pipes_upper(const std::vector<Instr>& window,
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes);
 // 9. I-Cache Fills Throughput
 double get_thr_icache_fills(const std::vector<Instr>& window,
                             uint16_t max_icache_fills);
@@ -58,95 +60,38 @@ double get_thr_fetch_buffers(const std::vector<Instr>& window,
                              uint16_t num_fetch_buffers);
 
 ////////////////////////////////////////////////////////////////////////////
-// Resource Mapping
+// Resource Registry Entry
 ////////////////////////////////////////////////////////////////////////////
 using ThrFunc = std::function<double(const std::vector<Instr>&,
                                      const std::vector<uint16_t>&)>;
-struct ResMeta {
-  ThrFunc get_thr;
-  ParamSweep param_sweep;
+
+// One entry per resource. RESOURCE_REGISTRY (in resource_registry.h, generated)
+// holds the full vector. models.cpp includes resource_registry.h directly.
+struct ResourceEntry {
+  Resource    resource;
+  const char* name;     // canonical name — used as .npy filename stem
+  bool        enabled;  // false → skip sweep, write no output file
+  ThrFunc     func;
+  ParamSweep  sweep;
 };
-using ResourceTable = std::array<ResMeta, static_cast<size_t>(Resource::COUNT)>;
-
-static const ResourceTable RESOURCE_TABLE = [] {
-  ResourceTable t{};
-  t[(size_t)Resource::ROB] = {
-      /* func */
-      [](const auto& w, auto p) { return get_thr_rob(w, p[0]); },
-      /* sweep */
-      ParamSweep{ParamType::ROB_SIZE}};
-
-  t[(size_t)Resource::LOAD_QUEUE] = {
-      [](const auto& w, auto p) { return get_thr_load_queue(w, p[0]); },
-      ParamSweep{ParamType::LOAD_QUEUE_SIZE}};
-
-  t[(size_t)Resource::STORE_QUEUE] = {
-      [](const auto& w, auto p) { return get_thr_store_queue(w, p[0]); },
-      ParamSweep{ParamType::STORE_QUEUE_SIZE}};
-
-  t[(size_t)Resource::ALU_ISSUE] = {
-      [](const auto& w, auto p) { return get_thr_alu_issue(w, p[0]); },
-      ParamSweep{ParamType::ALU_ISSUE_WIDTH}};
-
-  t[(size_t)Resource::ALU_MUL_ISSUE] = {
-      [](const auto& w, auto p) { return get_thr_alu_mul_issue(w, p[0]); },
-      ParamSweep{ParamType::ALU_MUL_ISSUE_WIDTH}};
-
-  t[(size_t)Resource::ALU_DIV_ISSUE] = {
-      [](const auto& w, auto p) { return get_thr_alu_div_issue(w, p[0]); },
-      ParamSweep{ParamType::ALU_DIV_ISSUE_WIDTH}};
-
-  t[(size_t)Resource::FP_ISSUE] = {
-      [](const auto& w, auto p) { return get_thr_fp_issue(w, p[0]); },
-      ParamSweep{ParamType::FP_ISSUE_WIDTH}};
-
-  t[(size_t)Resource::LS_ISSUE] = {
-      [](const auto& w, auto p) { return get_thr_ls_issue(w, p[0]); },
-      ParamSweep{ParamType::LS_ISSUE_WIDTH}};
-
-  t[(size_t)Resource::LOAD_LS_PIPES_LOWER] = {
-      [](const auto& w, auto p) {
-        return get_thr_ls_pipes_lower(w, p[0], p[1]);
-      },
-      ParamSweep{ParamType::NUM_LS_PIPES, ParamType::NUM_LOAD_PIPES}};
-
-  t[(size_t)Resource::LOAD_LS_PIPES_UPPER] = {
-      [](const auto& w, auto p) {
-        return get_thr_ls_pipes_upper(w, p[0], p[1]);
-      },
-      ParamSweep{ParamType::NUM_LS_PIPES, ParamType::NUM_LOAD_PIPES}};
-
-  t[(size_t)Resource::ICACHE_FILLS] = {
-      [](const auto& w, auto p) { return get_thr_icache_fills(w, p[0]); },
-      ParamSweep{ParamType::MAX_ICACHE_FILLS}};
-
-  t[(size_t)Resource::FETCH_BUFFERS] = {
-      [](const auto& w, auto p) { return get_thr_fetch_buffers(w, p[0]); },
-      ParamSweep{ParamType::NUM_FETCH_BUFFERS}};
-
-  return t;
-}();
 
 ////////////////////////////////////////////////////////////////////////////
 // Results
 ////////////////////////////////////////////////////////////////////////////
 struct ThrVec {
   std::vector<double> data;  // throughput for each window
-  // if true: two parameters (p0, p1); if false: one parameter (p0 only)
   bool double_params = false;
   uint16_t p0 = 0;
   uint16_t p1 = 0;
 };
 
-// One vector<ThrVec> per Resource
+// One vector<ThrVec> per Resource enum value
 using PerResThrVecs =
     std::array<std::vector<ThrVec>, static_cast<size_t>(Resource::COUNT)>;
 
 ////////////////////////////////////////////////////////////////////////////
 // Main Entry
 ////////////////////////////////////////////////////////////////////////////
-// Process instruction trace and populate PER_RES_THR_MAP
-// window_size: number of instructions per window (default: 400)
 PerResThrVecs get_throughput(std::vector<Instr> instr_trace,
                              int window_size = 400);
 
@@ -157,18 +102,15 @@ void export_throughputs(PerResThrVecs PER_RES_THR_VECS);
 ////////////////////////////////////////////////////////////////////////////
 struct RobLatencyData {
   uint16_t rob_size;
-  double overall_throughput;  // total_instructions / final_commit_cycle
-  std::vector<uint32_t> issue_latencies;   // s_i - a_i for all instructions
-  std::vector<uint32_t> commit_latencies;  // c_i - f_i for all instructions
-  std::vector<uint32_t> exec_latencies;    // f_i - s_i for all instructions
+  double overall_throughput;
+  std::vector<uint32_t> issue_latencies;
+  std::vector<uint32_t> commit_latencies;
+  std::vector<uint32_t> exec_latencies;
 };
 
-// Analyze ROB latency characteristics across the entire trace
-// Returns data for each ROB size in {1, 2, 4, 8, ..., 1024}
 std::vector<RobLatencyData> get_rob_latency_analysis(
     const std::vector<Instr>& instr_trace);
 
-// Export latency analysis results to .npy files in output/
 void export_latency_analysis(const std::vector<RobLatencyData>& latency_data);
 
 }  // namespace analytical

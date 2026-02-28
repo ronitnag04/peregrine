@@ -1,4 +1,5 @@
 #include "models.h"
+#include "resource_registry.h"  // RESOURCE_REGISTRY (generated)
 
 #include <cassert>
 #include <cstdio>
@@ -11,7 +12,6 @@
 
 #include "instr.h"
 #include "params.h"
-#include "resources.h"
 
 namespace analytical {
 
@@ -354,8 +354,8 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
 }
 
 // 7. Load/Load-Store Pipes Lower Bound Throughput
-double get_thr_ls_pipes_lower(const vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+double get_thr_load_ls_pipes_lower(const vector<Instr>& window,
+                                   uint16_t num_ls_pipes, uint16_t num_load_pipes) {
   // Based on worst-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -374,8 +374,8 @@ double get_thr_ls_pipes_lower(const vector<Instr>& window,
 }
 
 // 8. Load/Load-Store Pipes Upper Bound Throughput
-double get_thr_ls_pipes_upper(const vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
+                                   uint16_t num_ls_pipes, uint16_t num_load_pipes) {
   // Based on best-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -525,26 +525,33 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
 
   size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
 
+  // Collect enabled registry entries once (outside parallel region)
+  std::vector<const ResourceEntry*> enabled_entries;
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (entry.enabled) enabled_entries.push_back(&entry);
+  }
+
   // Parallel over resources, parameter sweeps, and windows
 #pragma omp parallel
   {
     // We will build thread-local results, then merge
     PerResThrVecs local_thr_vecs;
 
-    // Iterate resources in parallel (all threads share work)
+    // Iterate enabled resources in parallel (all threads share work)
 #pragma omp for schedule(dynamic)
-    for (size_t res_idx = 0; res_idx < (size_t)Resource::COUNT; ++res_idx) {
-      const auto& res_meta = RESOURCE_TABLE[res_idx];
+    for (int ei = 0; ei < (int)enabled_entries.size(); ++ei) {
+      const ResourceEntry& entry = *enabled_entries[ei];
+      size_t res_idx = static_cast<size_t>(entry.resource);
       auto& local_vecs_for_res = local_thr_vecs[res_idx];
 
       // Pre-size local_vecs_for_res to number of param combos
-      size_t num_param_combos = std::distance(res_meta.param_sweep.begin(),
-                                              res_meta.param_sweep.end());
+      size_t num_param_combos = std::distance(entry.sweep.begin(),
+                                              entry.sweep.end());
       local_vecs_for_res.resize(num_param_combos);
 
       // Parallelize over parameter combinations
       size_t combo_idx = 0;
-      for (const auto& params : res_meta.param_sweep) {
+      for (const auto& params : entry.sweep) {
         size_t p_idx = combo_idx++;
 
         ThrVec tv;
@@ -563,7 +570,7 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
           vector<Instr> window(instr_trace.begin() + start_idx,
                                instr_trace.begin() + end_idx);
 
-          double thr = res_meta.get_thr(window, params);
+          double thr = entry.func(window, params);
           tv.data[win_idx] = thr;
         }
 
@@ -692,38 +699,6 @@ std::vector<RobLatencyData> get_rob_latency_analysis(
   return results;
 }
 
-// Helper: map Resource enum to file-friendly name
-static const char* resource_file_name(Resource res) {
-  switch (res) {
-    case Resource::ROB:
-      return "ROB";
-    case Resource::LOAD_QUEUE:
-      return "LOAD_QUEUE";
-    case Resource::STORE_QUEUE:
-      return "STORE_QUEUE";
-    case Resource::ALU_ISSUE:
-      return "ALU_ISSUE";
-    case Resource::ALU_MUL_ISSUE:
-      return "ALU_MUL_ISSUE";
-    case Resource::ALU_DIV_ISSUE:
-      return "ALU_DIV_ISSUE";
-    case Resource::FP_ISSUE:
-      return "FP_ISSUE";
-    case Resource::LS_ISSUE:
-      return "LS_ISSUE";
-    case Resource::LOAD_LS_PIPES_LOWER:
-      return "LOAD_LS_PIPES_LOWER";
-    case Resource::LOAD_LS_PIPES_UPPER:
-      return "LOAD_LS_PIPES_UPPER";
-    case Resource::ICACHE_FILLS:
-      return "ICACHE_FILLS";
-    case Resource::FETCH_BUFFERS:
-      return "FETCH_BUFFERS";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 // Minimal NumPy .npy v1.0 writer for 2D float64 arrays in C-order.
 // shape: (rows, cols), data: rows*cols doubles, row-major.
 static void write_npy_2d_float64(const std::string& filename, size_t rows,
@@ -786,13 +761,13 @@ static void write_npy_2d_float64(const std::string& filename, size_t rows,
 }
 
 void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
-  const size_t num_resources = static_cast<size_t>(Resource::COUNT);
-
-  // Ensure output directory exists (simple, portable approach via system()).
+  // Ensure output directory exists.
   std::system("mkdir -p output");
 
-  for (size_t r = 0; r < num_resources; ++r) {
-    Resource res = static_cast<Resource>(r);
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (!entry.enabled) continue;
+
+    size_t r = static_cast<size_t>(entry.resource);
     const auto& thr_vecs = PER_RES_THR_VECS[r];
 
     // Skip resources with no data
@@ -816,27 +791,20 @@ void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
       const ThrVec& tv = thr_vecs[i];
       size_t base = i * cols;
 
-      // Param count
       array[base + 0] = double_params ? 2.0 : 1.0;
-
-      // Parameter values
       array[base + 1] = static_cast<double>(tv.p0);
       if (double_params) {
         array[base + 2] = static_cast<double>(tv.p1);
       }
 
-      // Throughput data starts after param_cols
       const size_t w = std::min(num_windows, tv.data.size());
       for (size_t j = 0; j < w; ++j) {
         array[base + param_cols + j] = tv.data[j];
       }
     }
 
-    // Build lowercase filename: output/thr_<resource>.npy
-    std::string res_name = resource_file_name(res);
-    for (auto& c : res_name) c = static_cast<char>(std::tolower(c));
-
-    std::string fname = std::string("output/thr_") + res_name + ".npy";
+    // Filename uses the canonical resource name from the registry.
+    std::string fname = std::string("output/thr_") + entry.name + ".npy";
     write_npy_2d_float64(fname, rows, cols, array);
   }
 }

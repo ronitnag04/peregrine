@@ -25,6 +25,14 @@ PARAM_STEP ?= BASE_2
 # Trace file
 TRACE_CSV ?= $(TRACE_DIR)/trace.csv
 
+# ---- Registry code generation ----
+# Edit registry.yaml to add/remove/enable/disable resources and params, then run make.
+REGISTRY_CONFIG ?= registry.yaml
+GENERATED_HEADERS := include/resources_gen.h include/params_gen.h include/resource_registry.h
+
+$(GENERATED_HEADERS): $(REGISTRY_CONFIG) python/gen_registry.py
+	$(PYTHON) python/gen_registry.py --config $(REGISTRY_CONFIG)
+
 # ---- Common sources ----
 SRCS_MODELS := $(SRC_DIR)/models.cpp
 
@@ -72,21 +80,22 @@ prep:
 	@mkdir -p $(BUILD) $(OBJDIR) $(OBJDIR)/tools $(OBJDIR)/tests
 
 # ---- Compile rules ----
-$(OBJDIR)/%.o: $(SRC_DIR)/%.cpp | prep
+# All objects depend on generated headers so a registry.yaml change triggers a rebuild.
+$(OBJDIR)/%.o: $(SRC_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) -c $< -o $@
 
-$(OBJDIR)/tests/%.o: $(TESTS_DIR)/%.cpp | prep
+$(OBJDIR)/tests/%.o: $(TESTS_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) -c $< -o $@
 
 # Standalone executables with STANDALONE_PARSER flag
-$(OBJDIR)/standalone_%.o: $(SRC_DIR)/%.cpp | prep
+$(OBJDIR)/standalone_%.o: $(SRC_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) -DSTANDALONE_PARSER -c $< -o $@
 
 # Serial (no OpenMP) objects for benchmark-only binary
-$(OBJDIR)/serial_%.o: $(SRC_DIR)/%.cpp | prep
+$(OBJDIR)/serial_%.o: $(SRC_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -o $@
 
@@ -174,6 +183,9 @@ benchmark: $(BUILD)/test_models_omp $(BUILD)/test_models_noomp
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean prep main.run parser.run test_parser.run \
+clean-gen:
+	rm -f $(GENERATED_HEADERS)
+
+.PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
 		benchmark anamol anamol.run

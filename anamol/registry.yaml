@@ -1,0 +1,233 @@
+# registry.yaml — single source of truth for all resources and parameters.
+#
+# Editing this file and running `make` is the only change needed to:
+#   - Enable or disable a resource (set enabled: true/false under resources)
+#   - Enable or disable a param from sweeps and sampling (set enabled: false under params)
+#   - Change sweep ranges or defaults
+#
+# DO NOT edit the generated C++ headers directly — they are overwritten by `make`.
+# Generated files: include/resources_gen.h, include/params_gen.h, include/resource_registry.h
+#
+# Adding a new resource:
+#   1. Implement get_thr_<name>() in src/models.cpp and declare it in include/models.h
+#   2. Add an entry here under `resources`
+#   3. Run `make` — the rest is auto-generated
+#
+# Adding a new param:
+#   1. Add an entry here under `params`
+#   2. Add a field to python/models.py Config (default comes from here)
+#   3. Run `make`
+
+params:
+  # C++ enum name = UPPER_CASE(name), e.g. rob_size -> ROB_SIZE
+  # Python Config field name = name
+  # step: "base2" or "linear"
+
+  - name: rob_size
+    min: 1
+    max: 1024
+    step: base2
+    default: 128
+    enabled: true
+
+  - name: commit_width
+    min: 1
+    max: 12
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: load_queue_size
+    min: 1
+    max: 256
+    step: base2
+    default: 64
+    enabled: true
+
+  - name: store_queue_size
+    min: 1
+    max: 256
+    step: base2
+    default: 64
+    enabled: true
+
+  - name: alu_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: alu_mul_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 2
+    enabled: true
+
+  - name: alu_div_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 1
+    enabled: true
+
+  - name: fp_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: ls_issue_width
+    min: 1
+    max: 8
+    step: base2
+    default: 2
+    enabled: true
+
+  - name: num_ls_pipes
+    min: 1
+    max: 8
+    step: base2
+    default: 2
+    enabled: true
+
+  - name: num_load_pipes
+    min: 0
+    max: 8
+    step: base2
+    default: 2
+    enabled: true
+
+  - name: fetch_width
+    min: 1
+    max: 12
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: decode_width
+    min: 1
+    max: 12
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: rename_width
+    min: 1
+    max: 12
+    step: base2
+    default: 4
+    enabled: true
+
+  - name: num_fetch_buffers
+    min: 1
+    max: 8
+    step: base2
+    default: 4
+    enabled: false
+
+  - name: max_icache_fills
+    min: 1
+    max: 32
+    step: base2
+    default: 8
+    enabled: true
+
+  - name: branch_predictor
+    min: 0
+    max: 1
+    step: linear
+    default: 0
+    enabled: true
+
+  - name: misprediction_percent
+    min: 0
+    max: 100
+    step: linear
+    default: 5
+    enabled: true
+
+  - name: l1d_cache_kb
+    min: 16
+    max: 256
+    step: base2
+    default: 64
+    enabled: true
+
+  - name: l1i_cache_kb
+    min: 16
+    max: 256
+    step: base2
+    default: 64
+    enabled: true
+
+  - name: l2_cache_kb
+    min: 512
+    max: 4096
+    step: base2
+    default: 1024
+    enabled: true
+
+  - name: l1d_stride_prefetch
+    min: 0
+    max: 1
+    step: linear
+    default: 1
+    enabled: true
+
+resources:
+  # C++ enum name   = UPPER_CASE(name), e.g. rob -> ROB
+  # C++ func name   = get_thr_<name>, e.g. rob -> get_thr_rob
+  # Output file     = thr_<name>.npy, e.g. rob -> thr_rob.npy
+  # Python key      = name
+  # params: ordered list of param names whose sweep drives this resource
+
+  - name: rob
+    params: [rob_size]
+    enabled: true
+
+  - name: load_queue
+    params: [load_queue_size]
+    enabled: true
+
+  - name: store_queue
+    params: [store_queue_size]
+    enabled: true
+
+  - name: alu_issue
+    params: [alu_issue_width]
+    enabled: true
+
+  - name: alu_mul_issue
+    params: [alu_mul_issue_width]
+    enabled: true
+
+  - name: alu_div_issue
+    params: [alu_div_issue_width]
+    enabled: true
+
+  - name: fp_issue
+    params: [fp_issue_width]
+    enabled: true
+
+  - name: ls_issue
+    params: [ls_issue_width]
+    enabled: true
+
+  - name: load_ls_pipes_lower
+    params: [num_ls_pipes, num_load_pipes]
+    enabled: true
+
+  - name: load_ls_pipes_upper
+    params: [num_ls_pipes, num_load_pipes]
+    enabled: true
+
+  - name: icache_fills
+    params: [max_icache_fills]
+    enabled: true
+
+  - name: fetch_buffers
+    params: [num_fetch_buffers]
+    enabled: false

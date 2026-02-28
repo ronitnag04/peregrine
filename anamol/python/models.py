@@ -1,115 +1,70 @@
+"""
+models.py — Python Config dataclass and Resource enum.
+
+All lists, dicts, and constants that were previously defined here
+(RESOURCE_FILES, DOUBLE_PARAM_RESOURCES, RESOURCE_PARAM_SPECS, etc.)
+now live in registry.py and are derived from registry.yaml.
+
+This file keeps only the Config dataclass and the Resource enum,
+both of which are sourced from registry.py.
+"""
+
 from dataclasses import dataclass
 from enum import Enum
 
-RESOURCE_FILES = [
-    "thr_rob.npy",
-    "thr_load_queue.npy",
-    "thr_store_queue.npy",
-    "thr_alu_issue.npy",
-    "thr_alu_mul_issue.npy",
-    "thr_alu_div_issue.npy",
-    "thr_fp_issue.npy",
-    "thr_ls_issue.npy",
-    "thr_load_ls_pipes_lower.npy",
-    "thr_load_ls_pipes_upper.npy",
-    "thr_icache_fills.npy",
-    "thr_fetch_buffers.npy",
-]
+import registry
 
 
-# new: enum of resource keys (values match the keys used in data)
-class Resource(Enum):
-    ROB = "rob"
-    LOAD_QUEUE = "load_queue"
-    STORE_QUEUE = "store_queue"
-    ALU_ISSUE = "alu_issue"
-    ALU_MUL_ISSUE = "alu_mul_issue"
-    ALU_DIV_ISSUE = "alu_div_issue"
-    FP_ISSUE = "fp_issue"
-    LS_ISSUE = "ls_issue"
-    LOAD_LS_PIPES_LOWER = "load_ls_pipes_lower"
-    LOAD_LS_PIPES_UPPER = "load_ls_pipes_upper"
-    ICACHE_FILLS = "icache_fills"
-    FETCH_BUFFERS = "fetch_buffers"
+# Resource enum — values are the canonical names used as lookup keys and
+# .npy filename stems. Derived from registry.yaml resource order.
+Resource = Enum(
+    "Resource",
+    {r.name.upper(): r.name for r in registry.RESOURCES},
+)
 
 
 def resource_key(r):
-    """Return the string key for a resource enum or string (backwards compatible)."""
+    """Return the string key for a Resource enum member or string."""
     if isinstance(r, Resource):
         return r.value
     return r
 
 
-DOUBLE_PARAM_RESOURCES = {
-    "load_ls_pipes_lower",
-    "load_ls_pipes_upper",
-}
-
-# Parameter name specifications per resource (use Resource enum keys).
-RESOURCE_PARAM_SPECS = {
-    Resource.ROB: ["ROB_SIZE"],
-    Resource.LOAD_QUEUE: ["LOAD_QUEUE_SIZE"],
-    Resource.STORE_QUEUE: ["STORE_QUEUE_SIZE"],
-    Resource.ALU_ISSUE: ["ALU_ISSUE_WIDTH"],
-    Resource.ALU_MUL_ISSUE: ["ALU_MUL_ISSUE_WIDTH"],
-    Resource.ALU_DIV_ISSUE: ["ALU_DIV_ISSUE_WIDTH"],
-    Resource.FP_ISSUE: ["FP_ISSUE_WIDTH"],
-    Resource.LS_ISSUE: ["LS_ISSUE_WIDTH"],
-    Resource.LOAD_LS_PIPES_LOWER: ["NUM_LS_PIPES", "NUM_LOAD_PIPES"],
-    Resource.LOAD_LS_PIPES_UPPER: ["NUM_LS_PIPES", "NUM_LOAD_PIPES"],
-    Resource.ICACHE_FILLS: ["MAX_ICACHE_FILLS"],
-    Resource.FETCH_BUFFERS: ["NUM_FETCH_BUFFERS"],
-}
-
-# Backwards-compatible mapping keyed by string keys and a small accessor.
-RESOURCE_PARAM_SPECS_BY_KEY = {
-    resource_key(r): spec for r, spec in RESOURCE_PARAM_SPECS.items()
-}
+# Re-export the derived constants from registry so callers that imported
+# them from models.py continue to work.
+RESOURCE_FILES = registry.RESOURCE_FILES
+DOUBLE_PARAM_RESOURCES = registry.DOUBLE_PARAM_RESOURCES
+RESOURCE_PARAM_SPECS = registry.RESOURCE_PARAM_SPECS
+RESOURCE_PARAM_SPECS_BY_KEY = registry.RESOURCE_PARAM_SPECS  # same dict
 
 
 def get_resource_param_spec(r):
     """Return param name list for resource r (accepts Resource or string)."""
-    return RESOURCE_PARAM_SPECS_BY_KEY.get(resource_key(r), ["param"])
+    return registry.RESOURCE_PARAM_SPECS.get(resource_key(r), ["param"])
 
 
 @dataclass
 class Config:
-    # Core/commit
-    rob_size: int = 128  # [1..1024]
-    commit_width: int = 4  # [1..12]
-
-    # Queues
-    load_queue_size: int = 64  # [1..256]
-    store_queue_size: int = 64  # [1..256]
-
-    # Issue widths
-    alu_issue_width: int = 4  # [1..8]
-    alu_mul_issue_width: int = 2  # [1..8]
-    alu_div_issue_width: int = 1  # [1..8]
-    fp_issue_width: int = 4  # [1..8]
-    ls_issue_width: int = 2  # [1..8]
-
-    # Pipelines
-    num_ls_pipes: int = 2  # [1..8]
-    num_load_pipes: int = 2  # [0..8]
-
-    # Frontend widths
-    fetch_width: int = 4  # [1..12]
-    decode_width: int = 4  # [1..12]
-    rename_width: int = 4  # [1..12]
-
-    # Frontend buffers and fills
-    num_fetch_buffers: int = 4  # [1..8]
-    max_icache_fills: int = 8  # [1..32]
-
-    # Branch predictor and accuracy
-    branch_predictor: int = 0  # 0/1 (linear) [0: simple, 1: TAGE]
-    misprediction_percent: int = 5  # [0..100]
-
-    # Caches (KB)
-    l1d_cache_kb: int = 64  # [16..256]
-    l1i_cache_kb: int = 64  # [16..256]
-    l2_cache_kb: int = 1024  # [512..4096]
-
-    # Prefetch
-    l1d_stride_prefetch: int = 1  # 0/1 (linear)
+    # Defaults come from registry.yaml — edit there, not here.
+    rob_size: int = registry.PARAMS_BY_NAME["rob_size"].default
+    commit_width: int = registry.PARAMS_BY_NAME["commit_width"].default
+    load_queue_size: int = registry.PARAMS_BY_NAME["load_queue_size"].default
+    store_queue_size: int = registry.PARAMS_BY_NAME["store_queue_size"].default
+    alu_issue_width: int = registry.PARAMS_BY_NAME["alu_issue_width"].default
+    alu_mul_issue_width: int = registry.PARAMS_BY_NAME["alu_mul_issue_width"].default
+    alu_div_issue_width: int = registry.PARAMS_BY_NAME["alu_div_issue_width"].default
+    fp_issue_width: int = registry.PARAMS_BY_NAME["fp_issue_width"].default
+    ls_issue_width: int = registry.PARAMS_BY_NAME["ls_issue_width"].default
+    num_ls_pipes: int = registry.PARAMS_BY_NAME["num_ls_pipes"].default
+    num_load_pipes: int = registry.PARAMS_BY_NAME["num_load_pipes"].default
+    fetch_width: int = registry.PARAMS_BY_NAME["fetch_width"].default
+    decode_width: int = registry.PARAMS_BY_NAME["decode_width"].default
+    rename_width: int = registry.PARAMS_BY_NAME["rename_width"].default
+    num_fetch_buffers: int = registry.PARAMS_BY_NAME["num_fetch_buffers"].default
+    max_icache_fills: int = registry.PARAMS_BY_NAME["max_icache_fills"].default
+    branch_predictor: int = registry.PARAMS_BY_NAME["branch_predictor"].default
+    misprediction_percent: int = registry.PARAMS_BY_NAME["misprediction_percent"].default
+    l1d_cache_kb: int = registry.PARAMS_BY_NAME["l1d_cache_kb"].default
+    l1i_cache_kb: int = registry.PARAMS_BY_NAME["l1i_cache_kb"].default
+    l2_cache_kb: int = registry.PARAMS_BY_NAME["l2_cache_kb"].default
+    l1d_stride_prefetch: int = registry.PARAMS_BY_NAME["l1d_stride_prefetch"].default

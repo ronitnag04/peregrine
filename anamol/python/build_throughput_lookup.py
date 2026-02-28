@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 
 # Local imports
+import registry
 import utils
 import models
 
@@ -179,29 +180,17 @@ class ThroughputLookupTable:
             If as_dataframe=False: Array of shape (N*101,) where N is number of resources
             If as_dataframe=True: DataFrame with 1 row and N*101 columns with descriptive names
         """
-        # Map config attributes to resource parameters
-        config_map = {
-            "rob": (config.rob_size,),
-            "load_queue": (config.load_queue_size,),
-            "store_queue": (config.store_queue_size,),
-            "alu_issue": (config.alu_issue_width,),
-            "alu_mul_issue": (config.alu_mul_issue_width,),
-            "alu_div_issue": (config.alu_div_issue_width,),
-            "fp_issue": (config.fp_issue_width,),
-            "ls_issue": (config.ls_issue_width,),
-            "load_ls_pipes_lower": (config.num_ls_pipes, config.num_load_pipes),
-            "load_ls_pipes_upper": (config.num_ls_pipes, config.num_load_pipes),
-            "icache_fills": (config.max_icache_fills,),
-            "fetch_buffers": (config.num_fetch_buffers,),
-        }
-
+        # Build config→params mapping from registry (no hardcoded dict).
+        # Each resource lists which Config fields provide its parameter values.
         feature_vectors = []
 
         for res_name in self.resource_order:
-            if res_name not in config_map:
-                raise ValueError(f"Unknown resource in data: {res_name}")
-
-            params = config_map[res_name]
+            res_def = registry.RESOURCES_BY_NAME.get(res_name)
+            if res_def is None:
+                raise ValueError(
+                    f"Resource '{res_name}' found in data but not in registry.yaml"
+                )
+            params = tuple(getattr(config, field) for field in res_def.params)
             feature_vec = self.query(res_name, params)
 
             if feature_vec is None:
