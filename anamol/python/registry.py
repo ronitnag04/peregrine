@@ -33,6 +33,11 @@ class ParamDef:
     step: str | list[int]  # "base2", "linear", or explicit list e.g. [0, 4]
     default: int
     enabled: bool
+    # gem5 field name(s):
+    #   str       → direct 1:1 mapping (e.g. "rob_size")
+    #   list[str] → sum of those gem5 fields (e.g. ls_issue_width)
+    #   None      → no gem5 counterpart (name_gem5 absent or "none")
+    name_gem5: str | list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,11 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
     params = []
     for p in data.get("params", []):
         step = p["step"]
+        raw_gem5 = p.get("name_gem5")
+        if raw_gem5 == "none":
+            name_gem5 = None
+        else:
+            name_gem5 = raw_gem5  # str, list[str], or None
         if isinstance(step, list):
             vals = list(step)
             params.append(ParamDef(
@@ -58,6 +68,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
                 step=vals,
                 default=p["default"],
                 enabled=p.get("enabled", True),
+                name_gem5=name_gem5,
             ))
         else:
             params.append(ParamDef(
@@ -67,6 +78,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
                 step=step,
                 default=p["default"],
                 enabled=p.get("enabled", True),
+                name_gem5=name_gem5,
             ))
 
     resources = [

@@ -25,6 +25,7 @@ params:
   #   discrete: min/max fields are not needed; values are swept/sampled from the list
 
   - name: rob_size
+    name_gem5: rob_size
     min: 1
     max: 1024
     step: base2
@@ -32,6 +33,7 @@ params:
     enabled: true
 
   - name: commit_width
+    name_gem5: commit_width
     min: 1
     max: 12
     step: base2
@@ -39,6 +41,7 @@ params:
     enabled: true
 
   - name: load_queue_size
+    name_gem5: lq_entries
     min: 1
     max: 256
     step: base2
@@ -46,6 +49,7 @@ params:
     enabled: true
 
   - name: store_queue_size
+    name_gem5: sq_entries
     min: 1
     max: 256
     step: base2
@@ -53,6 +57,7 @@ params:
     enabled: true
 
   - name: alu_issue_width
+    name_gem5: int_reg_issue_width
     min: 1
     max: 8
     step: base2
@@ -60,6 +65,7 @@ params:
     enabled: true
 
   - name: alu_mult_div_issue_width
+    name_gem5: int_mult_div_issue_width
     min: 1
     max: 8
     step: base2
@@ -67,6 +73,7 @@ params:
     enabled: true
 
   - name: fp_issue_width
+    name_gem5: fp_reg_issue_width
     min: 1
     max: 8
     step: base2
@@ -74,6 +81,7 @@ params:
     enabled: true
 
   - name: fp_mult_div_issue_width
+    name_gem5: fp_mult_div_issue_width
     min: 1
     max: 8
     step: base2
@@ -81,6 +89,7 @@ params:
     enabled: true
 
   - name: ls_issue_width
+    name_gem5: [rdwr_port_issue_width, read_port_issue_width]
     min: 1
     max: 8
     step: base2
@@ -88,6 +97,7 @@ params:
     enabled: true
 
   - name: num_ls_pipes
+    name_gem5: rdwr_port_issue_width
     min: 1
     max: 8
     step: base2
@@ -95,6 +105,7 @@ params:
     enabled: true
 
   - name: num_load_pipes
+    name_gem5: read_port_issue_width
     min: 0
     max: 8
     step: base2
@@ -102,6 +113,7 @@ params:
     enabled: true
 
   - name: fetch_width
+    name_gem5: fetch_width
     min: 1
     max: 12
     step: base2
@@ -109,6 +121,7 @@ params:
     enabled: true
 
   - name: decode_width
+    name_gem5: decode_width
     min: 1
     max: 12
     step: base2
@@ -116,6 +129,7 @@ params:
     enabled: true
 
   - name: rename_width
+    name_gem5: rename_width
     min: 1
     max: 12
     step: base2
@@ -123,6 +137,7 @@ params:
     enabled: true
 
   - name: num_fetch_buffers
+    name_gem5: none
     min: 1
     max: 8
     step: base2
@@ -130,6 +145,7 @@ params:
     enabled: false
 
   - name: max_icache_fills
+    name_gem5: max_icache_fills
     min: 1
     max: 32
     step: base2
@@ -137,6 +153,7 @@ params:
     enabled: true
 
   - name: branch_predictor
+    name_gem5: branch_predictor
     min: 0
     max: 1
     step: linear
@@ -144,6 +161,7 @@ params:
     enabled: true
 
   - name: misprediction_percent
+    name_gem5: none
     min: 0
     max: 100
     step: linear
@@ -151,6 +169,7 @@ params:
     enabled: true
 
   - name: l1d_cache_kb
+    name_gem5: l1d_size
     min: 16
     max: 256
     step: base2
@@ -158,6 +177,7 @@ params:
     enabled: true
 
   - name: l1i_cache_kb
+    name_gem5: l1i_size
     min: 16
     max: 256
     step: base2
@@ -165,6 +185,7 @@ params:
     enabled: true
 
   - name: l2_cache_kb
+    name_gem5: l2_size
     min: 512
     max: 4096
     step: base2
@@ -172,6 +193,7 @@ params:
     enabled: true
 
   - name: l1d_stride_prefetch
+    name_gem5: stride_prefetcher_degree
     step: [0, 4]
     default: 0
     enabled: true
