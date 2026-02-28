@@ -116,14 +116,14 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
       inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
 
       if (fetch_latency_str.empty()) {
-        throw std::runtime_error("Missing fetch latency at row: {}" +
+        throw std::runtime_error("Missing fetch latency at row: " +
                                  std::to_string(row));
       }
 
       inst.fetch_latency = std::stoul(fetch_latency_str);
 
       if (exec_latency_str.empty()) {
-        throw std::runtime_error("Missing execution latency at row {}" +
+        throw std::runtime_error("Missing execution latency at row " +
                                  std::to_string(row));
       }
 
