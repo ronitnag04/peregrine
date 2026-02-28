@@ -21,3 +21,4 @@ wheels/
 anamol/output
 *.pkl
 *.npy
+anamol/traces
