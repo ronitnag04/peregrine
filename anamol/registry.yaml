@@ -28,7 +28,7 @@ params:
     name_gem5: rob_size
     min: 1
     max: 1024
-    step: base2
+    step: linear
     default: 128
     enabled: true
 
@@ -36,7 +36,7 @@ params:
     name_gem5: commit_width
     min: 1
     max: 12
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -44,7 +44,7 @@ params:
     name_gem5: lq_entries
     min: 1
     max: 256
-    step: base2
+    step: linear
     default: 64
     enabled: true
 
@@ -52,7 +52,7 @@ params:
     name_gem5: sq_entries
     min: 1
     max: 256
-    step: base2
+    step: linear
     default: 64
     enabled: true
 
@@ -60,7 +60,7 @@ params:
     name_gem5: int_reg_issue_width
     min: 1
     max: 8
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -68,7 +68,7 @@ params:
     name_gem5: int_mult_div_issue_width
     min: 1
     max: 8
-    step: base2
+    step: linear
     default: 2
     enabled: true
 
@@ -76,7 +76,7 @@ params:
     name_gem5: fp_reg_issue_width
     min: 1
     max: 8
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -84,15 +84,15 @@ params:
     name_gem5: fp_mult_div_issue_width
     min: 1
     max: 8
-    step: base2
+    step: linear
     default: 2
     enabled: true
 
   - name: ls_issue_width
     name_gem5: [rdwr_port_issue_width, read_port_issue_width]
     min: 1
-    max: 8
-    step: base2
+    max: 16
+    step: linear
     default: 2
     enabled: true
 
@@ -100,15 +100,15 @@ params:
     name_gem5: rdwr_port_issue_width
     min: 1
     max: 8
-    step: base2
+    step: linear
     default: 2
     enabled: true
 
   - name: num_load_pipes
     name_gem5: read_port_issue_width
-    min: 0
+    min: 1
     max: 8
-    step: base2
+    step: linear
     default: 2
     enabled: true
 
@@ -116,7 +116,7 @@ params:
     name_gem5: fetch_width
     min: 1
     max: 12
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -124,7 +124,7 @@ params:
     name_gem5: decode_width
     min: 1
     max: 12
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -132,7 +132,7 @@ params:
     name_gem5: rename_width
     min: 1
     max: 12
-    step: base2
+    step: linear
     default: 4
     enabled: true
 
@@ -148,7 +148,7 @@ params:
     name_gem5: max_icache_fills
     min: 1
     max: 32
-    step: base2
+    step: linear
     default: 8
     enabled: true
 
