@@ -1,123 +1,129 @@
-Here is a comprehensive README for your team, documenting the structure, build process, and usage of the analytical modeling tools.
+# Training Data Pipeline
 
------
+The goal is to produce a feature matrix that a ML model can train on to predict processor performance. Each row in the matrix corresponds to one microarchitecture configuration; the columns are numerical features that describe (a) how that configuration would handle the workload and (b) properties of the workload itself.
 
-# Analytical Models
+## Data Flow
 
-This repository contains a C++20-based analytical modeling framework for estimating processor throughput, along with Python scripts for post-processing and analysis.
+```mermaid
+flowchart LR
+    classDef input  fill:#dae8fc,stroke:#6c8ebf,color:#000
+    classDef interm fill:#ffe6cc,stroke:#d6b656,color:#000
+    classDef output fill:#d5e8d4,stroke:#82b366,color:#000
+    classDef param  fill:#e1d5e7,stroke:#9673a6,color:#000
 
-## 1\. Project Structure
+    registry(["**registry.yaml**<br/>resources · params<br/>ranges · enabled flags"]):::param
+    trace[("**trace.csv**<br/>instruction trace")]:::input
+    config(["**Config**<br/>microarch parameters"]):::param
 
-```text
-analytical/
-├── Makefile              # Build automation (compile, test, benchmark)
-├── include/              # C++ header files (models.h, parser.h, instr.h)
-├── src/                  # C++ source files (main logic, models, parsing)
-├── tests/                # Unit tests for parameters and models
-├── traces/               # Input trace files (e.g., trace.csv)
-├── output/               # Output directory for generated .npy throughput files
-├── python/               # Post-processing scripts
-│   ├── anamol_post.py         # Interactive DataFrame loading/analysis
-│   ├── example_read_thr.py    # CLI tool to summarize output .npy files
-│   └── example_build_cdfs.py  # Generates CDF feature vectors from outputs
+    registry --> codegen
+    subgraph codegen ["**gen_registry.py** (run by make)"]
+        CG["registry.yaml → C++ headers<br/>resources_gen.h · params_gen.h<br/>resource_registry.h"]
+    end
+
+    trace --> cpp_sim
+    codegen --> cpp_sim
+    subgraph cpp_sim ["C++ simulator (**src/**)"]
+        A1["parse trace · categorise opcodes<br/>for each enabled resource × param value:<br/>simulate on 400-instruction windows<br/>→ record throughput (instrs / cycle)"]
+    end
+
+    cpp_sim --> thr_npy & lat_npy
+
+    thr_npy[("**thr_rob.npy, thr_load_queue.npy, …**<br/>one file per enabled resource<br/>param_combos × windows")]:::interm
+    lat_npy[("**rob_latency_issue/commit/exec.npy**<br/>per-instruction latencies<br/>11 ROB sizes × instructions")]:::interm
+
+    thr_npy --> lookup_py
+    registry --> lookup_py
+    subgraph lookup_py ["**build_throughput_lookup.py**"]
+        L1["Summarise each row into a 101-number<br/>distribution signature (CDF + mean)<br/>indexed by resource + param value"]
+    end
+
+    lookup_py --> pkl[("**throughput_lookup.pkl**<br/>resource + param value<br/>→ 101-number signature")]:::interm
+
+    pkl & trace & lat_npy & config & registry --> gen
+    subgraph gen ["**gen_training_data.py**"]
+        G1["Assemble one feature row per config:<br/>• throughput signatures   (enabled resources × 101)<br/>• branch/sync stall rates  (4 types × 101)<br/>• ROB latency signatures   (2,334)<br/>• config scalars           (enabled params + one-hot)"]
+    end
+
+    gen --> out[("**training_data.pkl / .csv**<br/>feature matrix<br/>1 row / config")]:::output
 ```
 
-## 2\. Prerequisites
+**Legend**
 
-  * **Compiler**: A C++20 compliant compiler (Makefile defaults to `g++-15`).
-  * **Libraries**: OpenMP (`libomp`) for parallel execution.
-  * **Python**: Python 3.x with `numpy` and `pandas` installed for post-processing.
+| Shape / colour | Meaning |
+|---|---|
+| Cylinder, blue | Input data file |
+| Cylinder, orange | Intermediate data file |
+| Cylinder, green | Final output |
+| Rounded rect, purple | Runtime parameter (not a file on disk) |
+| Subgraph | Code / script |
 
-## 3\. Building and Testing
+---
 
-The project uses a `Makefile` for all build operations.
+## Step 1 — C++ simulator (`src/`): generating throughput tables
 
-### Build Targets
+The C++ simulator (`src/parser.cpp` → `src/models.cpp`) reads and categorises the trace, then models each hardware resource in isolation. For each resource it asks: *"given this many parallel slots / this queue depth, how many instructions per cycle can this window of code sustain?"*
 
-  * **`make` / `make all`**: Compiles the main executable and all tests.
-  * **`make anamol`**: Compiles the main executable (`build/main`) and copies it to the root directory as `anamol`.
-  * **`make clean`**: Removes the `build/` directory.
+### What is a trace?
 
-### Running Tests & Benchmarks
+`trace.csv` is a record of every instruction executed by a program, in order. Each row contains the instruction's type, memory address (for loads/stores), branch information, and execution latency. The simulator reads this file and replays it analytically — no real hardware is needed.
 
-  * **`make test_params.run`**: Runs unit tests for configuration parameters.
-  * **`make benchmark`**: Compares performance between the serial and OpenMP (parallel) versions of the model.
+### Parameter sweep
 
-## 4\. Running the Model
+The simulator does not model one fixed microarchitecture. Instead, for each resource it sweeps a range of parameter values (powers of 2) so the resulting data covers the whole design space. Resources that depend on two parameters get the full cartesian product.
 
-The core tool reads a trace file, calculates throughputs using a sliding window, and exports the results to the `output/` directory.
+| Resource | Parameter(s) swept | Range | # values |
+|---|---|---|---|
+| Reorder Buffer (ROB) | rob_size | 1 – 1024 | 11 |
+| Load Queue | load_queue_size | 1 – 256 | 9 |
+| Store Queue | store_queue_size | 1 – 256 | 9 |
+| ALU issue slots | alu_issue_width | 1 – 8 | 4 |
+| ALU multiply slots | alu_mul_issue_width | 1 – 8 | 4 |
+| ALU divide slots | alu_div_issue_width | 1 – 8 | 4 |
+| FP issue slots | fp_issue_width | 1 – 8 | 4 |
+| Load/store issue slots | ls_issue_width | 1 – 8 | 4 |
+| Load & load/store pipes | num_ls_pipes × num_load_pipes | 1–8 × 0–8 | 4 × 5 = 20 |
+| I-cache fill buffers | max_icache_fills | 1 – 32 | 6 |
+| Fetch buffers | num_fetch_buffers | 1 – 8 | 4 |
 
-### Basic Usage
+### Window sliding
 
-You can run the executable directly after building:
+The trace is split into non-overlapping 400-instruction windows. For each `(resource, parameter value)` pair, the simulator evaluates every window independently and records `instructions / cycles` as a throughput sample.
 
-```bash
-./anamol -t traces/trace.csv -w 400
+### Output
+
+Each resource produces a 2-D `.npy` file:
+
+```
+rows  = parameter values  (from the sweep above)
+cols  = trace windows     (≈ len(trace) / 400)
+value = throughput        (instructions per cycle)
 ```
 
-### Command Line Arguments
+A separate ROB latency pass records per-instruction issue, execution, and commit latencies for 11 ROB sizes (powers of 2 from 1 to 1024).
 
-| Flag | Long Flag | Description | Default |
-| :--- | :--- | :--- | :--- |
-| `-t` | `--tracefile` | Path to the input CSV trace file. | `trace.csv` |
-| `-w` | `--window` | Sliding window size (instructions per window). | `400` |
+---
 
-### Makefile Shortcuts
+## Step 2 — `build_throughput_lookup.py`: compressing tables into signatures
 
-You can also run the model using Make convenience targets:
+A raw throughput table has one number per window, but the number of windows varies by trace length. To get a fixed-size, trace-length-independent representation, each row is compressed into a **101-number distribution signature**:
 
-```bash
-# Runs ./anamol with default parameters
-make anamol.run
+- 50 percentiles of the raw throughput distribution (p1, p3, … p99)
+- 50 percentiles of a window-size-weighted version
+- 1 mean value
 
-# Override defaults using Make variables
-make anamol.run TRACE_CSV=traces/my_trace.csv WINDOW_SIZE=1000
-```
+The result is stored in a pickle file indexed as `resource → parameter value → 101-number vector`. At query time, given any config, the lookup table returns the appropriate vector for each resource and concatenates them.
 
-## 5\. Output Data
+---
 
-The model exports throughput data into the `output/` directory as **NumPy (.npy)** files. Each file corresponds to a specific hardware resource (e.g., `thr_rob.npy`, `thr_alu_issue.npy`).
+## Step 3 — `gen_training_data.py`: assembling the feature matrix
 
-**File Format:**
+For each microarchitecture config, four groups of features are concatenated into one row:
 
-  * Files are 2D arrays: `[rows, columns]`
-  * **Columns**: Parameters (1 or 2 columns) + Windows (remaining columns).
-  * **Rows**: Different parameter combinations (e.g., varying ROB sizes).
+| Group | What it captures | # features |
+|---|---|---|
+| **Throughput signatures** | How each hardware resource performs on this workload at the config's parameter values | 12 resources × 101 = **1,212** |
+| **Pipeline stall rates** | Per-window counts of branch/sync instructions that can disrupt in-order fetch (ISBs, conditional branches, unconditional branches, indirect branches) | 4 types × 101 = **404** |
+| **ROB latency signatures** | How long instructions wait in the ROB (issue / exec / commit latency) across a range of ROB sizes | **2,334** |
+| **Config scalars** | The raw numeric parameters of the config (issue widths, queue sizes, cache sizes, branch predictor type, etc.) | **23** |
 
-## 6\. Python Post-Processing
-
-Scripts in the `python/` directory are provided to analyze the raw `.npy` outputs.
-
-### Summarizing Results
-
-Use `example_read_thr.py` to get a quick textual summary of the generated throughputs (min, max, average) for every parameter combination.
-
-```bash
-python python/example_read_thr.py --dir output
-```
-
-### Building CDFs
-
-Use `example_build_cdfs.py` to convert raw throughput traces into Cumulative Distribution Function (CDF) feature vectors.
-
-```bash
-python python/example_build_cdfs.py --input-dir output --output-dir output_cdf
-```
-
-This will:
-
-1.  Read all `.npy` files from `output/`.
-2.  Compute raw and weighted percentiles.
-3.  Save the resulting features to `output_cdf/`.
-
-### Interactive Analysis
-
-For Jupyter Notebooks or interactive shells, use `anamol_post.py`. It provides helper functions to load all resources directly into Pandas DataFrames:
-
-```python
-from analytical.python.anamol_post import build_cdfs_and_dataframes_per_resource
-
-# Loads all data into a dictionary of DataFrames
-dfs = build_cdfs_and_dataframes_per_resource(input_dir="output")
-print(dfs['rob'].head())
-```
+**Total: ~3,973 features per row.**
