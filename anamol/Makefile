@@ -10,8 +10,12 @@ else
 OMP_FLAG :=
 endif
 
+# Python interpreter
+PYTHON := python3
+# Output directory to pass to the visualizer (defaults to 'output')
+THR_DIR ?= output
+
 SRC_DIR := src
-TOOLS_DIR := $(SRC_DIR)/tools
 TESTS_DIR := tests
 TRACE_DIR := traces
 
@@ -20,7 +24,6 @@ OBJDIR := $(BUILD)/obj
 
 # ---- Parameters ----
 WINDOW_SIZE ?= 400
-PARAM_STEP ?= BASE_2
 
 # Trace file
 TRACE_CSV ?= $(TRACE_DIR)/trace.csv
@@ -35,7 +38,6 @@ $(GENERATED_HEADERS) $(GENERATED_PY): $(REGISTRY_CONFIG) python/gen_registry.py
 	$(PYTHON) python/gen_registry.py --config $(REGISTRY_CONFIG)
 
 # ---- Common sources ----
-SRCS_MODELS := $(SRC_DIR)/models.cpp
 
 # Serial-only models (no OpenMP), used for benchmark no-OMP binary
 SRCS_MODELS_SERIAL := $(SRC_DIR)/models.cpp
@@ -52,12 +54,12 @@ SRCS_TEST_PARAMS := \
 SRCS_TEST_MODELS := \
   $(TESTS_DIR)/test_models.cpp \
   $(SRCS_PARSER) \
-  $(SRCS_MODELS)
+  $(SRC_DIR)/models.cpp
 
 SRCS_MAIN := \
   $(SRC_DIR)/main.cpp \
   $(SRCS_PARSER) \
-  $(SRCS_MODELS)
+  $(SRC_DIR)/models.cpp
 
 # ---- Objects ----
 OBJS_MAIN := $(patsubst $(SRC_DIR)/%.cpp,$(OBJDIR)/%.o,$(filter $(SRC_DIR)/%,$(SRCS_MAIN)))
@@ -78,7 +80,7 @@ anamol: $(BUILD)/main
 
 # Ensure build directories exist
 prep:
-	@mkdir -p $(BUILD) $(OBJDIR) $(OBJDIR)/tools $(OBJDIR)/tests
+	@mkdir -p $(BUILD) $(OBJDIR) $(OBJDIR)/tests
 
 # ---- Compile rules ----
 # All objects depend on generated headers so a registry.yaml change triggers a rebuild.
@@ -90,7 +92,7 @@ $(OBJDIR)/tests/%.o: $(TESTS_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) -c $< -o $@
 
-# Standalone executables with STANDALONE_PARSER flag
+# Standalone parser executable with STANDALONE_PARSER flag
 $(OBJDIR)/standalone_%.o: $(SRC_DIR)/%.cpp $(GENERATED_HEADERS) | prep
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) -DSTANDALONE_PARSER -c $< -o $@
@@ -105,7 +107,7 @@ $(BUILD)/main: $(OBJS_MAIN)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) $^ -o $@
 
 $(BUILD)/parser: $(OBJS_PARSER)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) $^ -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDE) $(OMP_FLAG) $^ -o $@
 
 $(BUILD)/test_params: $(OBJS_TEST_PARAMS)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $^ -o $@
@@ -123,11 +125,6 @@ $(BUILD)/test_models: $(BUILD)/test_models_omp
 	cp $< $@
 
 # ---- Run targets ----
-
-# Python interpreter
-PYTHON := python3
-# Output directory to pass to the visualizer (defaults to 'output')
-THR_DIR ?= output
 
 main.run: $(BUILD)/main
 	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE)
@@ -189,4 +186,4 @@ clean-gen:
 
 .PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
-		benchmark anamol anamol.run
+		benchmark anamol anamol.run visualize.run
