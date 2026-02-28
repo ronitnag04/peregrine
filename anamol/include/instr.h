@@ -49,6 +49,7 @@ struct Instr {
 
   bool is_alu;
   bool is_alu_mult_div;
+  bool is_simd;
   bool is_fp;
   bool is_fp_mult_div;
   bool is_load;
