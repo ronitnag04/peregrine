@@ -148,8 +148,8 @@ def parse_gem5_row(row: pd.Series) -> models.Config:
             row["branch_predictor"]
         )
 
-    # misprediction_percent: not in gem5 CSV — use Config default
-    # (no entry → dataclass default of 5 is used)
+    # misprediction_percent: not in gem5 CSV — populated later from trace_bp.json
+    # (no entry → dataclass default of 0.05 is used until _load_bp_rate overwrites it)
 
     return models.Config(**config_dict)
 
@@ -417,7 +417,7 @@ def process_sweep_csv(
         # Populate misprediction_percent from trace BP sim results
         bp_rate = _load_bp_rate(trace_dir, config.branch_predictor)
         if bp_rate is not None:
-            config.misprediction_percent = round(bp_rate * 100)
+            config.misprediction_percent = bp_rate
 
         # Deterministic cache directory per (benchmark, config)
         config_hash = _config_to_hash(config)
@@ -511,7 +511,7 @@ def _process_single_row(
 
     bp_rate = _load_bp_rate(trace_dir, config.branch_predictor)
     if bp_rate is not None:
-        config.misprediction_percent = round(bp_rate * 100)
+        config.misprediction_percent = bp_rate
 
     try:
         row_df = generate_training_matrix(

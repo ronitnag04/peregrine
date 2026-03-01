@@ -162,10 +162,11 @@ params:
 
   - name: misprediction_percent
     name_gem5: none
-    min: 0
-    max: 100
+    type: float
+    min: 0.0
+    max: 1.0
     step: linear
-    default: 5
+    default: 0.05
     enabled: true
 
   - name: l1d_cache_kb

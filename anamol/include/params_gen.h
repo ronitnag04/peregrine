@@ -67,7 +67,7 @@ inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES =
     {1, 8, PARAM_STEP},  // NUM_FETCH_BUFFERS
     {1, 32, StepType::LINEAR},  // MAX_ICACHE_FILLS
     {0, 1, StepType::LINEAR},  // BRANCH_PREDICTOR
-    {0, 100, StepType::LINEAR},  // MISPREDICTION_PERCENT
+    {0, 0, StepType::LINEAR},  // MISPREDICTION_PERCENT (float param, not swept)
     {16, 256, PARAM_STEP},  // L1D_CACHE_KB
     {16, 256, PARAM_STEP},  // L1I_CACHE_KB
     {512, 4096, PARAM_STEP},  // L2_CACHE_KB

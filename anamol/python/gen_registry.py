@@ -109,7 +109,13 @@ def gen_params_h(params: list, out_dir: Path) -> None:
     step_map = {"base2": "PARAM_STEP", "linear": "StepType::LINEAR"}
     for p in params:
         comment = snake_to_upper(p["name"])
-        if isinstance(p["step"], list):
+        if p.get("type") == "float":
+            # Float params have no meaningful integer sweep range; emit a
+            # placeholder so the PARAM_RANGES array size matches ParamType::COUNT.
+            # No resource uses a float param as its sweep driver, so this is
+            # never iterated by the C++ model.
+            lines.append(f"    {{0, 0, StepType::LINEAR}},  // {comment} (float param, not swept)")
+        elif isinstance(p["step"], list):
             upper_name = snake_to_upper(p["name"])
             lines.append(
                 f"    ParamRange{{std::span<const uint16_t>{{detail::{upper_name}_VALS}}}},  // {comment}"
@@ -259,7 +265,10 @@ def gen_config_py(params: list, py_out_dir: Path) -> None:
     lines.append("@dataclass")
     lines.append("class Config:")
     for p in params:
-        lines.append(f"    {p['name']}: int = {p['default']}")
+        if p.get("type") == "float":
+            lines.append(f"    {p['name']}: float = {p['default']}")
+        else:
+            lines.append(f"    {p['name']}: int = {p['default']}")
     lines.append("")
 
     write_atomically(py_out_dir / "config_gen.py", "\n".join(lines))

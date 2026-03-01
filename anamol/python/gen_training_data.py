@@ -106,7 +106,9 @@ def sample_random_config() -> models.Config:
     """
     config_dict = {}
     for p in registry.ENABLED_PARAMS:
-        if isinstance(p.step, list):
+        if p.param_type == "float":
+            config_dict[p.name] = float(np.random.uniform(p.min_val, p.max_val))
+        elif isinstance(p.step, list):
             config_dict[p.name] = int(np.random.choice(p.step))
         else:
             config_dict[p.name] = int(np.random.randint(p.min_val, p.max_val + 1))

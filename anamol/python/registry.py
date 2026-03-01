@@ -28,16 +28,18 @@ _DEFAULT_YAML = Path(__file__).parent.parent / "registry.yaml"
 @dataclass(frozen=True)
 class ParamDef:
     name: str       # snake_case — matches Config field name
-    min_val: int
-    max_val: int
+    min_val: int | float
+    max_val: int | float
     step: str | list[int]  # "base2", "linear", or explicit list e.g. [0, 4]
-    default: int
+    default: int | float
     enabled: bool
     # gem5 field name(s):
     #   str       → direct 1:1 mapping (e.g. "rob_size")
     #   list[str] → sum of those gem5 fields (e.g. ls_issue_width)
     #   None      → no gem5 counterpart (name_gem5 absent or "none")
     name_gem5: str | list[str] | None = None
+    # "int" (default) or "float" — controls Config field type and sampling
+    param_type: str = "int"
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
             name_gem5 = None
         else:
             name_gem5 = raw_gem5  # str, list[str], or None
+        param_type = p.get("type", "int")
         if isinstance(step, list):
             vals = list(step)
             params.append(ParamDef(
@@ -74,6 +77,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
                 default=p["default"],
                 enabled=p.get("enabled", True),
                 name_gem5=name_gem5,
+                param_type=param_type,
             ))
         else:
             params.append(ParamDef(
@@ -84,6 +88,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
                 default=p["default"],
                 enabled=p.get("enabled", True),
                 name_gem5=name_gem5,
+                param_type=param_type,
             ))
 
     resources = [
