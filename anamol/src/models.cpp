@@ -521,91 +521,62 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
 
   PerResThrVecs PER_RES_THR_VECS;
 
-  // clear any previous results (single-thread)
-  for (auto& v : PER_RES_THR_VECS) v.clear();
-
   size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
 
-  // Collect filtered registry entries once (outside parallel region)
-  std::vector<const ResourceEntry*> enabled_entries;
+  // Phase 1 (serial): build a flat list of (resource, param-combo) work units
+  // and pre-populate PER_RES_THR_VECS with correct sizes and metadata.
+  // Pre-allocation here means Phase 2 threads never resize any container,
+  // so writes to different (res_idx, p_idx) slots are race-free.
+  struct ParamUnit {
+    size_t res_idx;
+    size_t p_idx;
+    ThrFunc func;
+    std::vector<uint16_t> params;
+  };
+  std::vector<ParamUnit> param_units;
+
   for (const auto& entry : RESOURCE_REGISTRY) {
     if (!entry.enabled) continue;
     if (latency_dep_filter.has_value() &&
         entry.latency_dependent != latency_dep_filter.value()) continue;
-    enabled_entries.push_back(&entry);
+
+    size_t res_idx = static_cast<size_t>(entry.resource);
+    auto& vecs = PER_RES_THR_VECS[res_idx];
+
+    size_t p_idx = 0;
+    for (const auto& params : entry.sweep) {
+      if (vecs.size() <= p_idx) vecs.resize(p_idx + 1);
+
+      ThrVec& tv = vecs[p_idx];
+      tv.double_params = (params.size() > 1);
+      tv.p0 = params.size() > 0 ? params[0] : 0;
+      tv.p1 = params.size() > 1 ? params[1] : 0;
+      tv.data.assign(num_windows, 0.0);
+
+      param_units.push_back({res_idx, p_idx, entry.func, params});
+      ++p_idx;
+    }
   }
 
-  // Parallel over resources, parameter sweeps, and windows
-#pragma omp parallel
-  {
-    // We will build thread-local results, then merge
-    PerResThrVecs local_thr_vecs;
+  // Phase 2 (parallel): one thread per (resource, param-combo) work unit.
+  // Each unit owns a unique (res_idx, p_idx) slot → no races, no critical
+  // sections, no thread-local storage needed.
+#pragma omp parallel for schedule(dynamic)
+  for (int pu_idx = 0; pu_idx < (int)param_units.size(); ++pu_idx) {
+    const auto& pu = param_units[pu_idx];
+    ThrVec& tv = PER_RES_THR_VECS[pu.res_idx][pu.p_idx];
 
-    // Iterate enabled resources in parallel (all threads share work)
-#pragma omp for schedule(dynamic)
-    for (int ei = 0; ei < (int)enabled_entries.size(); ++ei) {
-      const ResourceEntry& entry = *enabled_entries[ei];
-      size_t res_idx = static_cast<size_t>(entry.resource);
-      auto& local_vecs_for_res = local_thr_vecs[res_idx];
+    for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
+      size_t start_idx = (size_t)win_idx * window_size;
+      size_t end_idx =
+          std::min(start_idx + (size_t)window_size, instr_trace.size());
 
-      // Pre-size local_vecs_for_res to number of param combos
-      size_t num_param_combos = std::distance(entry.sweep.begin(),
-                                              entry.sweep.end());
-      local_vecs_for_res.resize(num_param_combos);
+      vector<Instr> window(instr_trace.begin() + start_idx,
+                           instr_trace.begin() + end_idx);
 
-      // Parallelize over parameter combinations
-      size_t combo_idx = 0;
-      for (const auto& params : entry.sweep) {
-        size_t p_idx = combo_idx++;
-
-        ThrVec tv;
-        tv.double_params = (params.size() > 1);
-        tv.p0 = params.size() > 0 ? params[0] : 0;
-        tv.p1 = params.size() > 1 ? params[1] : 0;
-        tv.data.resize(num_windows);
-
-        // Parallelize over windows
-#pragma omp parallel for schedule(static)
-        for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
-          size_t start_idx = (size_t)win_idx * window_size;
-          size_t end_idx =
-              std::min(start_idx + (size_t)window_size, instr_trace.size());
-
-          vector<Instr> window(instr_trace.begin() + start_idx,
-                               instr_trace.begin() + end_idx);
-
-          double thr = entry.func(window, params);
-          tv.data[win_idx] = thr;
-        }
-
-        local_vecs_for_res[p_idx] = std::move(tv);
-      }
+      tv.data[win_idx] = pu.func(window, pu.params);
     }
-
-    // Merge thread-local results into global PER_RES_THR_VECS
-#pragma omp critical
-    {
-      for (size_t res_idx = 0; res_idx < (size_t)Resource::COUNT; ++res_idx) {
-        auto& global_vecs = PER_RES_THR_VECS[res_idx];
-        auto& local_vecs = local_thr_vecs[res_idx];
-        if (!local_vecs.empty()) {
-          // Initialize global container once
-          if (global_vecs.empty()) {
-            global_vecs.resize(local_vecs.size());
-          }
-          // Merge each ThrVec (same param index goes to same slot)
-          for (size_t i = 0; i < local_vecs.size(); ++i) {
-            if (!local_vecs[i].data.empty()) {
-              // If this slot is unused, move it
-              if (global_vecs[i].data.empty()) {
-                global_vecs[i] = std::move(local_vecs[i]);
-              }
-            }
-          }
-        }
-      }
-    }
-  }  // end outer omp parallel
+  }
 
   return PER_RES_THR_VECS;
 }
