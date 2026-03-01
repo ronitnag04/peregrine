@@ -1,8 +1,7 @@
 from evantrace.x86.instructions import Instruction
 from evantrace.caches import Cache
-from evantrace.branch_predictor import BranchPredictor
 
-class Sim:
+class CacheSim:
     """
     Implements the in-order cache simulation given
     a trace of Instructions
@@ -13,14 +12,12 @@ class Sim:
         trace: list[Instruction],
         icache: Cache,
         dcache: Cache,
-        l2cache: Cache,
-        branch_predictor: BranchPredictor
+        l2cache: Cache
     ):
         self.trace: list[Instruction] = trace
         self.icache: Cache = icache
         self.dcache: Cache = dcache
         self.l2cache: Cache = l2cache
-        self.branch_predictor: BranchPredictor = branch_predictor
 
     def run(self):
         for instruction in self.trace:
@@ -32,6 +29,3 @@ class Sim:
                 
             instruction.fetch_latency = fetch_latency
             instruction.exec_latency = exec_latency
-
-            predicted_taken = self.branch_predictor.predict(instruction.inst_ptr, instruction.branch_type)  
-            self.branch_predictor.update(instruction.inst_ptr, instruction.branch_type, predicted_taken, instruction.branch_taken)
