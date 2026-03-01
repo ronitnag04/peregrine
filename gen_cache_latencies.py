@@ -103,9 +103,9 @@ def main():
 
     trace_dir = os.path.dirname(os.path.abspath(trace_filename))
     stem = os.path.splitext(os.path.basename(trace_filename))[0]
-    out_npy = os.path.join(trace_dir, f"{stem}_latencies.npy")
-    out_json = os.path.join(trace_dir, f"{stem}_configs.json")
-    tmp_path = os.path.join(trace_dir, f".{stem}_latencies_tmp.npy")
+    out_npy = os.path.join(trace_dir, f"{stem}_cache_latencies.npy")
+    out_json = os.path.join(trace_dir, f"{stem}_cache_configs.json")
+    tmp_path = os.path.join(trace_dir, f".{stem}_cache_latencies_tmp.npy")
 
     N = len(instructions)
     tasks = [(i, l1i, l1d, l2) for i, (l1i, l1d, l2) in enumerate(configs)]
