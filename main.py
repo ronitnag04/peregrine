@@ -9,7 +9,8 @@ from humanfriendly import parse_size
 from evantrace.parser import Parser
 from evantrace.writer import Writer
 from evantrace.caches import Cache
-from evantrace.sim import Sim
+from evantrace.cache_sim import CacheSim
+from evantrace.bp_sim import BPSim
 from evantrace.x86.instructions import Instruction
 from evantrace.branch_predictor import LocalBranchPredictor, TAGEBranchPredictor
 
@@ -64,17 +65,21 @@ def process_row(row: dict[str, str], trace: list[Instruction]):
     else:
         branch_predictor = TAGEBranchPredictor()
         
-    sim = Sim(
+    cachesim = CacheSim(
         trace=trace, 
         icache=icache, 
         dcache=dcache, 
         l2cache=l2cache, 
+    )
+    cachesim.run()
+    writer.write(trace)
+
+    bpsim = BPSim(
+        trace=trace,
         branch_predictor=branch_predictor
     )
-    sim.run()
-    
-    writer.write(trace)
-        
+    bpsim.run()
+    print(f'BP: {row["branch_predictor"]} Misprediction rate: {branch_predictor.get_misprediction_rate()}')
 
 def main():
     if len(sys.argv) != 3:
