@@ -1,22 +1,16 @@
 """
-annotate_trace.py
+gen_cache_latencies.py
 
 Runs the cache simulation for all combinations of cache parameters and writes
 ONE .npy file per trace containing per-instruction latencies for every config.
 
 Output shape: (N_configs, N_instructions, 2) uint16
-  axis 0: config index (product of L1_KB × L1_KB × L2_KB × BP_IDS)
+  axis 0: config index (product of L1_KB × L1_KB × L2_KB)
   axis 1: instruction index
   axis 2: [0] = fetch_latency, [1] = exec_latency
 
-Config index formula (matches anamol C++ lookup):
-  idx = l1i_rank*40 + l1d_rank*8 + l2_rank*2 + bp_id
-  where *_rank = position in the sorted grid list.
-
-Companion configs.json lists the grid so C++ can verify alignment.
-
-Usage: python annotate_trace.py <trace.csv>
-Output: <trace_dir>/<trace_stem>_latencies.npy   (same directory as input trace)
+Usage: python gen_cache_latencies.py <trace.csv>
+Output: <trace_dir>/<trace_stem>_latencies.npy
         <trace_dir>/<trace_stem>_configs.json
 """
 
@@ -30,8 +24,7 @@ import numpy as np
 
 from evantrace.parser import Parser
 from evantrace.caches import Cache
-from evantrace.sim import Sim
-from evantrace.branch_predictor import LocalBranchPredictor, TAGEBranchPredictor
+from evantrace.cache_sim import CacheSim
 
 # ── per-process shared state (set once via initializer) ──────────────────────
 _instructions = None
@@ -44,8 +37,8 @@ def _init_worker(instr_list):
 
 def _worker(args):
     """Run one cache config in a worker process. Returns (config_index, uint16 array)."""
-    idx, l1i_kb, l1d_kb, l2_kb, bp_id = args
-    latencies = run_sim(_instructions, l1i_kb, l1d_kb, l2_kb, bp_id)
+    idx, l1i_kb, l1d_kb, l2_kb = args
+    latencies = run_cache_sim(_instructions, l1i_kb, l1d_kb, l2_kb)
     # shape (N, 2): col 0 = fetch_latency, col 1 = exec_latency
     return idx, np.array(latencies, dtype=np.uint16)
 
@@ -53,7 +46,6 @@ def _worker(args):
 # Parameter grids (KB), matching params_gen.h
 L1_KB = [16, 32, 64, 128, 256]  # L1I and L1D
 L2_KB = [512, 1024, 2048, 4096]  # L2
-BP_IDS = [0, 1]  # 0 = Local, 1 = TAGE
 
 # Cache fixed parameters
 L1_ASSOC = 8
@@ -62,13 +54,7 @@ L1_READ_LAT = 4
 L2_READ_LAT = 12
 
 
-def make_bp(bp_id: int):
-    if bp_id == 0:
-        return LocalBranchPredictor(local_predictor_size=2048, local_ctr_bits=2)
-    return TAGEBranchPredictor()
-
-
-def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int, bp_id: int):
+def run_cache_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int):
     """Simulate one cache config. Returns list of (fetch_latency, exec_latency)."""
     l2cache = Cache(
         associativity=L2_ASSOC,
@@ -87,12 +73,11 @@ def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int, bp_id: int):
         read_latency=L1_READ_LAT,
         parent=l2cache,
     )
-    sim = Sim(
+    sim = CacheSim(
         trace=instructions,
         icache=icache,
         dcache=dcache,
         l2cache=l2cache,
-        branch_predictor=make_bp(bp_id),
     )
     sim.run()
     return [(instr.fetch_latency, instr.exec_latency) for instr in instructions]
@@ -100,7 +85,7 @@ def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int, bp_id: int):
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python annotate_trace.py <trace.csv>")
+        print("Usage: python gen_cache_latencies.py <trace.csv>")
         sys.exit(1)
 
     trace_filename = sys.argv[1]
@@ -111,7 +96,7 @@ def main():
         sys.exit(1)
     print(f"  {len(instructions)} instructions")
 
-    configs = list(product(L1_KB, L1_KB, L2_KB, BP_IDS))
+    configs = list(product(L1_KB, L1_KB, L2_KB))
     n = len(configs)
     n_workers = os.cpu_count() or 1
     print(f"Running {n} cache configurations on {n_workers} workers...")
@@ -123,7 +108,7 @@ def main():
     tmp_path = os.path.join(trace_dir, f".{stem}_latencies_tmp.npy")
 
     N = len(instructions)
-    tasks = [(i, l1i, l1d, l2, bp) for i, (l1i, l1d, l2, bp) in enumerate(configs)]
+    tasks = [(i, l1i, l1d, l2) for i, (l1i, l1d, l2) in enumerate(configs)]
 
     renamed = False
     mmap = None
@@ -144,8 +129,8 @@ def main():
                 idx, arr = future.result()  # arr: uint16 array (N, 2)
                 mmap[idx, :, :] = arr  # contiguous write; arr freed immediately
                 done += 1
-                l1i, l1d, l2, bp = configs[idx]
-                print(f"  [{done:3d}/{n}] {l1i}_{l1d}_{l2}_{bp}")
+                l1i, l1d, l2 = configs[idx]
+                print(f"  [{done:3d}/{n}] {l1i}_{l1d}_{l2}")
 
         # Flush and close before rename
         mmap = None
@@ -157,7 +142,7 @@ def main():
             json.dump(
                 {
                     "configs": [list(c) for c in configs],
-                    "fields": ["l1i_kb", "l1d_kb", "l2_kb", "bp_id"],
+                    "fields": ["l1i_kb", "l1d_kb", "l2_kb"],
                     "shape": [n, N, 2],
                     "dtype": "uint16",
                 },
@@ -165,7 +150,7 @@ def main():
                 indent=2,
             )
 
-        print(f"Done.  {n} configs × {N} instructions × 2 → {out_npy}")
+        print(f"Done.  {n} cache configs × {N} instructions × 2 → {out_npy}")
         print(f"       config map → {out_json}")
 
     finally:
