@@ -191,6 +191,48 @@ consolidate.run:
 	$(PYTHON) python/consolidate_training.py \
 		-i $(TRAINING_DIR) -o $(TRAINING_DIR)/all_traces.pkl
 
+# ── Sweep-to-training pipeline ───────────────────────────────────────────────
+# Generate training data directly from a gem5 sweep results CSV.
+# Each row in the CSV becomes one training row (no lookup table required).
+#
+# Parameters:
+#   SWEEP_CSV      path to sweep_results.csv (default: most recent sim_sweep dir)
+#   BENCHMARKS     comma-separated benchmark whitelist, e.g. "collatz,sparse"
+#                  (default: empty = all benchmarks found in CSV)
+#   SWEEP_DO_SWEEP set to 1 to run full param sweeps once per benchmark
+#                  instead of single-config runs per row (builds lookup tables)
+#   SWEEP_FORMAT   output format: pkl (default) or csv
+#   SWEEP_OUT      output file path (default: training/sweep_training.<format>)
+#
+# Examples:
+#   make sweep_training.run BENCHMARKS=collatz
+#   make sweep_training.run SWEEP_DO_SWEEP=1 SWEEP_FORMAT=csv
+SWEEP_CSV              ?= sim_sweeps/sim_sweep_02_24_2026/sweep_results.csv
+BENCHMARKS             ?=
+SWEEP_DO_SWEEP         ?= 0
+SWEEP_FORMAT           ?= pkl
+SWEEP_OUT              ?= $(TRAINING_DIR)/sweep_training.$(SWEEP_FORMAT)
+# Set SWEEP_PRECOMPUTED_DIR to an existing anamol output base directory
+# (organized as <dir>/<benchmark>/) to skip re-running the binary.
+# Example: make sweep_training.run SWEEP_PRECOMPUTED_DIR=output BENCHMARKS=collatz
+SWEEP_PRECOMPUTED_DIR  ?=
+# Number of parallel worker threads for sweep_training.run (default: os.cpu_count())
+SWEEP_WORKERS          ?=
+
+sweep_training.run:
+	@mkdir -p $(TRAINING_DIR)
+	$(PYTHON) python/sweep_to_training.py \
+		--sweep-csv $(SWEEP_CSV) \
+		--traces-dir traces \
+		--window-size $(WINDOW_SIZE) \
+		--output-dir .cache/sweep_out \
+		--format $(SWEEP_FORMAT) \
+		-o $(SWEEP_OUT) \
+		$(if $(BENCHMARKS),--benchmarks $(BENCHMARKS),) \
+		$(if $(filter 1,$(SWEEP_DO_SWEEP)),--do-sweep,) \
+		$(if $(SWEEP_PRECOMPUTED_DIR),--precomputed-dir $(SWEEP_PRECOMPUTED_DIR),) \
+		$(if $(SWEEP_WORKERS),--workers $(SWEEP_WORKERS),)
+
 # Convenience run target for anamol
 anamol.run: main.run visualize.run
 	@true
@@ -249,4 +291,5 @@ clean-gen:
 .PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
 		benchmark anamol anamol.run visualize.run \
-		lookup.run training.run pipeline.run all_traces.run consolidate.run
+		lookup.run training.run pipeline.run all_traces.run consolidate.run \
+		sweep_training.run

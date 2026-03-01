@@ -581,6 +581,76 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
   return PER_RES_THR_VECS;
 }
 
+// Single-config throughput: computes throughput for exactly one set of param values.
+PerResThrVecs get_throughput_single_config(
+    vector<Instr> instr_trace, int window_size,
+    const std::map<std::string, uint16_t>& config,
+    std::optional<bool> latency_dep_filter) {
+  if (instr_trace.empty()) return {};
+
+  PerResThrVecs PER_RES_THR_VECS;
+
+  size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
+
+  struct ParamUnit {
+    size_t res_idx;
+    ThrFunc func;
+    std::vector<uint16_t> params;
+  };
+  std::vector<ParamUnit> param_units;
+
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (!entry.enabled) continue;
+    if (latency_dep_filter.has_value() &&
+        entry.latency_dependent != latency_dep_filter.value()) continue;
+
+    // Build param vector from config using entry.param_names
+    std::vector<uint16_t> params;
+    for (const auto& pname : entry.param_names) {
+      auto it = config.find(pname);
+      if (it != config.end()) {
+        params.push_back(it->second);
+      } else {
+        std::cerr << "Warning: param '" << pname
+                  << "' not found in config for resource '" << entry.name
+                  << "', using 0\n";
+        params.push_back(0);
+      }
+    }
+
+    size_t res_idx = static_cast<size_t>(entry.resource);
+    auto& vecs = PER_RES_THR_VECS[res_idx];
+    vecs.resize(1);
+
+    ThrVec& tv = vecs[0];
+    tv.double_params = (params.size() > 1);
+    tv.p0 = params.size() > 0 ? params[0] : 0;
+    tv.p1 = params.size() > 1 ? params[1] : 0;
+    tv.data.assign(num_windows, 0.0);
+
+    param_units.push_back({res_idx, entry.func, params});
+  }
+
+#pragma omp parallel for schedule(dynamic)
+  for (int pu_idx = 0; pu_idx < (int)param_units.size(); ++pu_idx) {
+    const auto& pu = param_units[pu_idx];
+    ThrVec& tv = PER_RES_THR_VECS[pu.res_idx][0];
+
+    for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
+      size_t start_idx = (size_t)win_idx * window_size;
+      size_t end_idx =
+          std::min(start_idx + (size_t)window_size, instr_trace.size());
+
+      vector<Instr> window(instr_trace.begin() + start_idx,
+                           instr_trace.begin() + end_idx);
+
+      tv.data[win_idx] = pu.func(window, pu.params);
+    }
+  }
+
+  return PER_RES_THR_VECS;
+}
+
 // ROB Latency Analysis Implementation
 std::vector<RobLatencyData> get_rob_latency_analysis(
     const std::vector<Instr>& instr_trace) {

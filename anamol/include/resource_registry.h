@@ -20,6 +20,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         true,
         [](const auto& w, const auto& p) { return get_thr_rob(w, p[0]); },
         ParamSweep{ParamType::ROB_SIZE},
+        std::vector<std::string>{"rob_size"},
     },
     {
         Resource::LOAD_QUEUE,
@@ -28,6 +29,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         true,
         [](const auto& w, const auto& p) { return get_thr_load_queue(w, p[0]); },
         ParamSweep{ParamType::LOAD_QUEUE_SIZE},
+        std::vector<std::string>{"load_queue_size"},
     },
     {
         Resource::STORE_QUEUE,
@@ -36,6 +38,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         true,
         [](const auto& w, const auto& p) { return get_thr_store_queue(w, p[0]); },
         ParamSweep{ParamType::STORE_QUEUE_SIZE},
+        std::vector<std::string>{"store_queue_size"},
     },
     {
         Resource::ALU_ISSUE,
@@ -44,6 +47,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_alu_issue(w, p[0]); },
         ParamSweep{ParamType::ALU_ISSUE_WIDTH},
+        std::vector<std::string>{"alu_issue_width"},
     },
     {
         Resource::ALU_MULT_DIV_ISSUE,
@@ -52,6 +56,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_alu_mult_div_issue(w, p[0]); },
         ParamSweep{ParamType::ALU_MULT_DIV_ISSUE_WIDTH},
+        std::vector<std::string>{"alu_mult_div_issue_width"},
     },
     {
         Resource::FP_ISSUE,
@@ -60,6 +65,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_fp_issue(w, p[0]); },
         ParamSweep{ParamType::FP_ISSUE_WIDTH},
+        std::vector<std::string>{"fp_issue_width"},
     },
     {
         Resource::FP_MULT_DIV_ISSUE,
@@ -68,6 +74,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_fp_mult_div_issue(w, p[0]); },
         ParamSweep{ParamType::FP_MULT_DIV_ISSUE_WIDTH},
+        std::vector<std::string>{"fp_mult_div_issue_width"},
     },
     {
         Resource::LS_ISSUE,
@@ -76,6 +83,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_ls_issue(w, p[0]); },
         ParamSweep{ParamType::LS_ISSUE_WIDTH},
+        std::vector<std::string>{"ls_issue_width"},
     },
     {
         Resource::LOAD_LS_PIPES_LOWER,
@@ -84,6 +92,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_load_ls_pipes_lower(w, p[0], p[1]); },
         ParamSweep{ParamType::NUM_LS_PIPES, ParamType::NUM_LOAD_PIPES},
+        std::vector<std::string>{"num_ls_pipes", "num_load_pipes"},
     },
     {
         Resource::LOAD_LS_PIPES_UPPER,
@@ -92,6 +101,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         false,
         [](const auto& w, const auto& p) { return get_thr_load_ls_pipes_upper(w, p[0], p[1]); },
         ParamSweep{ParamType::NUM_LS_PIPES, ParamType::NUM_LOAD_PIPES},
+        std::vector<std::string>{"num_ls_pipes", "num_load_pipes"},
     },
     {
         Resource::ICACHE_FILLS,
@@ -100,6 +110,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         true,
         [](const auto& w, const auto& p) { return get_thr_icache_fills(w, p[0]); },
         ParamSweep{ParamType::MAX_ICACHE_FILLS},
+        std::vector<std::string>{"max_icache_fills"},
     },
     {
         Resource::FETCH_BUFFERS,
@@ -108,6 +119,7 @@ static const std::vector<ResourceEntry> RESOURCE_REGISTRY = {
         true,
         [](const auto& w, const auto& p) { return get_thr_fetch_buffers(w, p[0]); },
         ParamSweep{ParamType::NUM_FETCH_BUFFERS},
+        std::vector<std::string>{"num_fetch_buffers"},
     },
 };
 

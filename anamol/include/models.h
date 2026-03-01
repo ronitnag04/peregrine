@@ -41,6 +41,7 @@ struct ResourceEntry {
                                  //        must be re-run per cache config
   ThrFunc     func;
   ParamSweep  sweep;
+  std::vector<std::string> param_names;  // ordered param names driving this resource
 };
 
 ////////////////////////////////////////////////////////////////////////////
@@ -66,6 +67,14 @@ using PerResThrVecs =
 PerResThrVecs get_throughput(std::vector<Instr> instr_trace,
                              int window_size = 400,
                              std::optional<bool> latency_dep_filter = std::nullopt);
+
+// Single-config variant: runs only for the specified param values (no sweep).
+// config maps param name → value for all params needed by enabled resources.
+PerResThrVecs get_throughput_single_config(
+    std::vector<Instr> instr_trace,
+    int window_size,
+    const std::map<std::string, uint16_t>& config,
+    std::optional<bool> latency_dep_filter = std::nullopt);
 
 void export_throughputs(PerResThrVecs PER_RES_THR_VECS, const std::string& output_dir);
 

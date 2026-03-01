@@ -303,6 +303,7 @@ def gen_resource_registry_h(resources: list, params_by_name: dict, out_dir: Path
             f"ParamType::{snake_to_upper(p)}" for p in res_params
         )
 
+        param_names_str = ", ".join(f'"{p}"' for p in res_params)
         lines.append("    {")
         lines.append(f"        Resource::{enum_name},")
         lines.append(f'        "{name}",')
@@ -310,6 +311,7 @@ def gen_resource_registry_h(resources: list, params_by_name: dict, out_dir: Path
         lines.append(f"        {latency_dep},")
         lines.append(f"        [](const auto& w, const auto& p) {{ return {func_call}; }},")
         lines.append(f"        ParamSweep{{{param_enum_list}}},")
+        lines.append(f"        std::vector<std::string>{{{param_names_str}}},")
         lines.append("    },")
 
     lines.append("};")
