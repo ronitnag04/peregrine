@@ -25,6 +25,7 @@ anamol/
 ├── src/
 │   ├── models.cpp           # All get_thr_* implementations + get_throughput()
 │   ├── main.cpp             # Entry point: parse trace → run models → export
+│   ├── npy_reader.h         # Minimal numpy v1.0 reader for latency .npy files
 │   ├── parser.cpp           # CSV trace parser
 │   └── convert_trace.cpp    # Trace format conversion utility
 │
@@ -44,8 +45,23 @@ anamol/
 │   ├── visualize.py                # Plotting utilities
 │   └── example_plot_thr.py         # Example: plot throughput distributions
 │
-├── traces/                  # Input dynamic instruction traces (.csv)
-└── output/                  # C++ simulator output: thr_*.npy, rob_latency_*.npy
+├── traces/                  # Input dynamic instruction traces
+│   └── foo/                 # One folder per trace (recommended)
+│       ├── trace.csv            # Raw trace
+│       ├── trace_latencies.npy  # Produced by annotate_trace.py — (N_configs, N_instrs, 2) uint16
+│       └── trace_configs.json   # Config index map produced alongside the .npy
+└── output/                  # Analytical model output
+    ├── <stem>/
+    │   ├── thr_alu_issue.npy        # Latency-independent resources (written once)
+    │   ├── thr_fp_issue.npy
+    │   ├── ...
+    │   ├── config_0000/             # Per-cache-config output
+    │   │   ├── thr_rob.npy          # Latency-dependent resources
+    │   │   ├── thr_load_queue.npy
+    │   │   ├── rob_latency_*.npy
+    │   │   └── ...
+    │   └── config_0199/
+    │       └── ...
 ```
 
 ---
@@ -71,15 +87,36 @@ resources:
   - name: rob                        # Python key; C++ enum: ROB; function: get_thr_rob; file: thr_rob.npy
     params: [rob_size]               # 1 or 2 params
     enabled: true
+    latency_dependent: [exe]         # calls resp_cycle() → exe_latency; re-run per cache config
+
+  - name: alu_issue
+    params: [alu_issue_width]
+    enabled: true
+    latency_dependent: []            # instruction count only; computed once
+
+  - name: icache_fills
+    params: [max_icache_fills]
+    enabled: true
+    latency_dependent: [fetch]       # uses instr.fetch_latency directly
 
   - name: load_ls_pipes_lower
     params: [num_ls_pipes, num_load_pipes]   # 2-param resource
     enabled: true
+    latency_dependent: []
 
   - name: fetch_buffers
     params: [num_fetch_buffers]
     enabled: false                   # skipped by C++ and Python
+    latency_dependent: [fetch]       # uses instr.fetch_latency directly
 ```
+
+`latency_dependent` is a list of latency types the resource's model reads:
+- `[exe]` — calls `resp_cycle()` → `instr.exe_latency` (ROB, LQ, SQ)
+- `[fetch]` — reads `instr.fetch_latency` directly (icache_fills, fetch_buffers)
+- `[exe, fetch]` — depends on both
+- `[]` — instruction counts only; computed once, shared across all cache configs
+
+Any non-empty list means the resource is re-run per cache config when `--latencies-npy` is supplied.
 
 ### Naming convention (enforced by YAML)
 
@@ -111,6 +148,7 @@ The generated registry entry looks like:
     Resource::ROB,
     "rob",
     true,   // enabled
+    true,   // latency_dependent — re-run per cache config when --latencies-npy is used
     [](const auto& w, const auto& p) { return get_thr_rob(w, p[0]); },
     ParamSweep{ParamType::ROB_SIZE},
 },
@@ -131,7 +169,23 @@ source ~/.venvs/berkourse/bin/activate
 # PyYAML must be installed (uv pip install pyyaml)
 ```
 
-All commands below are run from `anamol/`.
+All commands below are run from the **repo root** for Step 0 and from `anamol/` for Steps 1–6.
+
+---
+
+### Step 0 — Annotate the trace with cache latencies
+
+Run from the **repo root** (not `anamol/`):
+
+```bash
+python annotate_trace.py anamol/traces/foo/trace.csv
+```
+
+This sweeps `(l1i_kb, l1d_kb, l2_kb, bp_id)` across 200 cache configurations, runs the full cache+branch-predictor simulation for each, and writes next to the input CSV:
+- `anamol/traces/foo/trace_latencies.npy` — shape `(200, N_instrs, 2)` uint16: `[fetch_latency, exe_latency]` per instruction per config
+- `anamol/traces/foo/trace_configs.json` — config index map for lookup
+
+This step is slow (parallel via `ProcessPoolExecutor`). Re-run only when the trace changes or when the cache parameter grid changes.
 
 ---
 
@@ -155,7 +209,7 @@ params:
 
 ---
 
-### Step 2 — Build the C++ simulator
+### Step 2 — Build the C++ analytical model
 
 ```bash
 make
@@ -173,47 +227,88 @@ make OMP=0
 
 ---
 
-### Step 3 — Run the simulator on a trace
+### Step 3 — Run the analytical model on a trace
+
+If the trace lives in its own folder (the recommended layout — see [directory structure](#directory-structure)), pass `TRACE_DIR` and all three paths are derived automatically:
 
 ```bash
-make main.run TRACE_CSV=traces/collatz_trace_with_latency.csv WINDOW_SIZE=400
+# Mode B (recommended) — folder layout:
+make main.run TRACE_DIR=traces/foo WINDOW_SIZE=400
 
-# Or directly:
-./build/main -t traces/collatz_trace_with_latency.csv -w 400
+# Mode A — folder layout (no latency sweep):
+make main.run TRACE_DIR=traces/foo WINDOW_SIZE=400 LATENCIES_NPY=
 ```
 
-This writes to `output/`:
-- `thr_<resource>.npy` for every **enabled** resource — shape `(num_param_combos, param_cols + num_windows)`
-- `rob_latency_overall_thr.npy` — shape `(11, 2)`: ROB size vs. overall throughput
-- `rob_latency_issue.npy`, `rob_latency_commit.npy`, `rob_latency_exec.npy` — shape `(11, num_instructions)`: per-instruction latencies for 11 ROB sizes
+`TRACE_DIR=traces/foo` expands to `TRACE_CSV=traces/foo/trace.csv`, `LATENCIES_NPY=traces/foo/trace_latencies.npy`, `CONFIGS_JSON=traces/foo/trace_configs.json`, and output goes to `output/foo/`. Any variable can be overridden on the command line.
 
-The `window_size` passed here must match the value used in Python (Step 5).
+Alternatively, pass individual files:
+
+#### Mode A — Single-latency (no cache sweep)
+
+```bash
+make main.run TRACE_CSV=traces/foo.csv WINDOW_SIZE=400
+```
+
+Trace CSV latency columns (`Fetch Latency`, `Execution Latency`) are optional — if absent they default to 0. Useful for quickly checking structural resource throughputs on a raw PIN trace. **Latency-dependent resources (ROB, LQ, SQ, icache_fills) will produce meaningless results with zero latencies** — use Mode B for those.
+
+Writes to `output/foo/`:
+- `thr_<resource>.npy` for every **enabled** resource — shape `(num_param_combos, param_cols + num_windows)`
+- `rob_latency_overall_thr.npy`, `rob_latency_issue.npy`, `rob_latency_commit.npy`, `rob_latency_exec.npy`
+
+#### Mode B — Per-cache-config (with latency sweep, recommended)
+
+```bash
+make main.run \
+    TRACE_CSV=traces/foo.csv \
+    WINDOW_SIZE=400 \
+    LATENCIES_NPY=traces/foo/trace_latencies.npy
+```
+
+Requires the `.npy` produced by Step 0. Trace latency columns are ignored — latencies come from the `.npy` per config. Writes to `output/foo/`:
+- **Latency-independent resources** (`latency_dependent: []`): written once in `output/foo/thr_<res>.npy`
+- **Latency-dependent resources** (non-empty `latency_dependent`) + ROB analysis: written per config in `output/foo/config_0000/` … `config_0199/`
+
+The `WINDOW_SIZE` passed here must match the value used in Python (Step 5).
 
 ---
 
 ### Step 4 — Build the throughput lookup table
 
-Only needed after the simulator output changes (new trace, changed param ranges, or toggled resources).
+Only needed after the analytical model output changes (new trace, changed param ranges, or toggled resources).
 
 ```bash
-python3 python/build_throughput_lookup.py \
-    -i output/ \
-    -o output/throughput_lookup.pkl
+# Folder layout (recommended — derives output dir and configs-json automatically):
+make lookup.run TRACE_DIR=traces/foo
 ```
 
-This reads all enabled `thr_*.npy` files and builds a lookup table:
-```
-{resource_name: {(param_values,...): 101-dim feature vector}}
+Or with individual files:
+
+#### Mode A (no cache sweep)
+```bash
+make lookup.run TRACE_CSV=traces/foo.csv
 ```
 
-Each **101-dim feature vector** per (resource, param combo) encodes the throughput distribution across all windows:
+#### Mode B (with cache sweep — recommended)
+```bash
+make lookup.run \
+    TRACE_CSV=traces/foo.csv \
+    CONFIGS_JSON=traces/foo/trace_configs.json
+```
+
+`CONFIGS_JSON` / `trace_configs.json` maps cache parameter combinations to config indices and enables `lookup.get_config_features(config, cache_config)`. Without it the lookup is built in Mode A (no per-config indexing).
+
+This reads all enabled `thr_*.npy` files and builds a lookup table keyed by:
+- **Latency-independent resources**: `(param_values, ...)` → 101-dim feature vector
+- **Latency-dependent resources** (when `CONFIGS_JSON` is given): `(cache_config_idx, *param_values)` → 101-dim feature vector
+
+Each **101-dim feature vector** encodes the throughput distribution across all windows:
 - 50 raw CDF percentiles (p1, p3, …, p99)
 - 50 size-weighted CDF percentiles
 - 1 mean value
 
 To test the lookup table after building:
 ```bash
-python3 python/build_throughput_lookup.py -i output/ -o /tmp/test.pkl --test
+python3 python/build_throughput_lookup.py -i output/foo -o /tmp/test.pkl --test
 ```
 
 ---
@@ -221,23 +316,35 @@ python3 python/build_throughput_lookup.py -i output/ -o /tmp/test.pkl --test
 ### Step 5 — Generate training data
 
 ```bash
-# Single config (with specific overrides from defaults):
-python3 python/gen_training_data.py \
-    --lookup output/throughput_lookup.pkl \
-    --trace traces/collatz_trace_with_latency.csv \
-    --window-size 400 \
-    --config-json '{"rob_size": 256, "load_queue_size": 128}' \
-    -o training_data.pkl
+# N random configs (primary mode):
+make training.run TRACE_DIR=traces/foo RANDOM_CONFIGS=1000 SEED=42
 
-# N random configs:
-python3 python/gen_training_data.py \
-    --lookup output/throughput_lookup.pkl \
-    --trace traces/collatz_trace_with_latency.csv \
-    --window-size 400 \
-    --random-configs 1000 \
-    --seed 42 \
-    -o training_data.pkl   # or .csv
+# Specific config (wrap the entire assignment in single quotes):
+make training.run TRACE_DIR=traces/foo 'CONFIG_JSON={"rob_size":256,"load_queue_size":128}'
 ```
+
+Output: `training/foo.pkl` (one row per config). `SEED` is optional. `RANDOM_CONFIGS` defaults to 1000. When `CONFIG_JSON` is set it takes precedence over `RANDOM_CONFIGS`.
+
+#### Full pipeline (Steps 3–5 in one command)
+
+```bash
+make pipeline.run TRACE_DIR=traces/foo WINDOW_SIZE=400 RANDOM_CONFIGS=1000 SEED=42
+```
+
+Runs `main.run` → `lookup.run` → `training.run` in sequence. All the same `TRACE_DIR`, `WINDOW_SIZE`, `SEED`, and `CONFIG_JSON` variables apply.
+
+#### Multi-trace: run and consolidate
+
+```bash
+# One full pipeline per trace:
+make pipeline.run TRACE_DIR=traces/foo RANDOM_CONFIGS=1000 SEED=42
+make pipeline.run TRACE_DIR=traces/bar RANDOM_CONFIGS=1000 SEED=42
+
+# Merge all per-trace .pkl files into a single matrix:
+make consolidate.run   # reads training/*.pkl → training/all_traces.pkl
+```
+
+`consolidate.run` reads every `*.pkl` in `training/` and stacks them row-wise into `training/all_traces.pkl`.
 
 The output is a DataFrame with one row per config and the following column groups:
 
@@ -270,13 +377,14 @@ make benchmark \                       # compare serial vs. OpenMP wall time
 
 ## When to re-run each step
 
-| What changed | Step 2 (`make`) | Step 3 (simulator) | Step 4 (lookup) | Step 5 (training data) |
-|---|:---:|:---:|:---:|:---:|
-| `registry.yaml` — enable/disable resource | ✅ | ✅ | ✅ | ✅ |
-| `registry.yaml` — change param range/default | ✅ | ✅ | ✅ | ✅ |
-| C++ model logic (`src/models.cpp`) | ✅ | ✅ | ✅ | ✅ |
-| New trace file | — | ✅ | ✅ | ✅ |
-| Different configs for training only | — | — | — | ✅ |
+| What changed | Step 0 (annotate) | Step 2 (`make`) | Step 3 (model) | Step 4 (lookup) | Step 5 (training data) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `registry.yaml` — enable/disable resource | — | ✅ | ✅ | ✅ | ✅ |
+| `registry.yaml` — change param range/default | — | ✅ | ✅ | ✅ | ✅ |
+| C++ model logic (`src/models.cpp`) | — | ✅ | ✅ | ✅ | ✅ |
+| New trace file | ✅ | — | ✅ | ✅ | ✅ |
+| Cache parameter grid changed (`L1_KB`, `L2_KB`, `BP_IDS`) | ✅ | — | ✅ | ✅ | ✅ |
+| Different configs for training only | — | — | — | — | ✅ |
 
 ---
 
@@ -326,7 +434,7 @@ Edit the function body in `src/models.cpp`, then `make`. No YAML change needed u
 
 ### Change a param's sweep range
 
-Edit `min`/`max` in `registry.yaml`, then `make` → re-run simulator → rebuild lookup table.
+Edit `min`/`max` in `registry.yaml`, then `make` → re-run the model → rebuild lookup table.
 
 ### Remove a resource (hard delete)
 
@@ -380,18 +488,23 @@ df = generate_training_matrix(configs, lookup, "traces/collatz_trace_with_latenc
 config = sample_random_config()   # draws each param independently from registry.yaml ranges
 
 # Query lookup table directly (returns 101-dim array or None)
-vec = lookup.query("rob", (128,))
-vec = lookup.query("load_ls_pipes_lower", (2, 2))
+vec = lookup.query("rob", (128,))                        # latency-independent
+vec = lookup.query("load_ls_pipes_lower", (2, 2))        # latency-independent
 
-# Full feature vector for a config (returns numpy array of shape (N_resources * 101,))
-features = lookup.get_config_features(config)
-features_df = lookup.get_config_features(config, as_dataframe=True)
+# For latency-dependent resources, include the cache config index as the first key element
+# (only available when --configs-json was passed during build_throughput_lookup.py)
+vec = lookup.query("rob", (cfg_idx, 128))                # latency-dependent
+
+# Full feature vector for a config — requires cache_config dict for latency-dependent resources
+cache_cfg = {"l1i_kb": 64, "l1d_kb": 64, "l2_kb": 1024, "bp_id": 1}
+features = lookup.get_config_features(config, cache_config=cache_cfg)
+features_df = lookup.get_config_features(config, cache_config=cache_cfg, as_dataframe=True)
 
 # Just pipeline stall features (no lookup needed)
 stall_df = compute_pipeline_stall_features("traces/collatz_trace_with_latency.csv", window_size=400)
 
-# Just ROB latency features
-latency_df = compute_rob_latency_features("output/")
+# Just ROB latency features (for per-config mode, pass a config_NNNN/ subdirectory)
+latency_df = compute_rob_latency_features("output/foo/config_0000/")
 ```
 
 ### Key Python modules

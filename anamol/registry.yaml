@@ -204,51 +204,68 @@ resources:
   # Output file     = thr_<name>.npy, e.g. rob -> thr_rob.npy
   # Python key      = name
   # params: ordered list of param names whose sweep drives this resource
+  # latency_dependent: list of latency types this resource depends on.
+  #   [exe]         → uses resp_cycle() → instr.exe_latency (ROB, LQ, SQ)
+  #   [fetch]       → uses instr.fetch_latency directly (icache_fills, fetch_buffers)
+  #   [exe, fetch]  → depends on both
+  #   []            → instruction counts only; computed once, shared across all cache configs
 
   - name: rob
     params: [rob_size]
     enabled: true
+    latency_dependent: [exe]    # get_thr_rob calls resp_cycle() → exe_latency
 
   - name: load_queue
     params: [load_queue_size]
     enabled: true
+    latency_dependent: [exe]    # get_thr_load_queue calls resp_cycle() → exe_latency
 
   - name: store_queue
     params: [store_queue_size]
     enabled: true
+    latency_dependent: [exe]    # get_thr_store_queue calls resp_cycle() → exe_latency
 
   - name: alu_issue
     params: [alu_issue_width]
     enabled: true
+    latency_dependent: []       # instruction count only
 
   - name: alu_mult_div_issue
     params: [alu_mult_div_issue_width]
     enabled: true
+    latency_dependent: []
 
   - name: fp_issue
     params: [fp_issue_width]
     enabled: true
+    latency_dependent: []
 
   - name: fp_mult_div_issue
     params: [fp_mult_div_issue_width]
     enabled: true
+    latency_dependent: []
 
   - name: ls_issue
     params: [ls_issue_width]
     enabled: true
+    latency_dependent: []
 
   - name: load_ls_pipes_lower
     params: [num_ls_pipes, num_load_pipes]
     enabled: true
+    latency_dependent: []
 
   - name: load_ls_pipes_upper
     params: [num_ls_pipes, num_load_pipes]
     enabled: true
+    latency_dependent: []
 
   - name: icache_fills
     params: [max_icache_fills]
     enabled: true
+    latency_dependent: [fetch]  # get_thr_icache_fills uses instr.fetch_latency directly
 
   - name: fetch_buffers
     params: [num_fetch_buffers]
     enabled: false
+    latency_dependent: [fetch]  # get_thr_fetch_buffers uses instr.fetch_latency directly

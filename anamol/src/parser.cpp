@@ -77,7 +77,8 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
         in(csv_path);
 
     in.read_header(
-        io::ignore_extra_column, "IP", "Assembly", "Category", "Opcode",
+        io::ignore_extra_column | io::ignore_missing_column,
+        "IP", "Assembly", "Category", "Opcode",
         "Branch Type", "Branch Taken", "Branch Target Address",
         "Instruction Sync", "Read Registers", "Write Registers",
         "Register Dependent IPs", "Read Addresses", "Write Addresses",
@@ -88,9 +89,9 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
     std::string inst_sync_str;
     std::string read_regs_str, write_regs_str, reg_deps_str;
     std::string read_addrs_str, write_addrs_str, mem_deps_str;
-    std::string fetch_latency_str, exec_latency_str;
-
-    uint64_t row = 2;
+    // Initialize to "0" so missing columns default to zero latency.
+    // Latencies will be overridden per cache config when --latencies-npy is used.
+    std::string fetch_latency_str = "0", exec_latency_str = "0";
 
     while (in.read_row(ip_str, assembly, category, opcode, branch_type,
                        branch_taken, branch_target_addr, inst_sync_str,
@@ -115,19 +116,10 @@ std::vector<tracing::instr_trace_t> parse_csv(const std::string& csv_path) {
       inst.write_addresses = parse_mem_access_list(write_addrs_str);
       inst.mem_dependent_ips = parse_ip_list(mem_deps_str);
 
-      if (fetch_latency_str.empty()) {
-        throw std::runtime_error("Missing fetch latency at row: " +
-                                 std::to_string(row));
-      }
-
-      inst.fetch_latency = std::stoul(fetch_latency_str);
-
-      if (exec_latency_str.empty()) {
-        throw std::runtime_error("Missing execution latency at row " +
-                                 std::to_string(row));
-      }
-
-      inst.exe_latency = std::stoul(exec_latency_str);
+      inst.fetch_latency =
+          fetch_latency_str.empty() ? 0 : std::stoul(fetch_latency_str);
+      inst.exe_latency =
+          exec_latency_str.empty() ? 0 : std::stoul(exec_latency_str);
 
       instructions.push_back(inst);
     }

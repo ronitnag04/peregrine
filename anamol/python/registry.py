@@ -9,7 +9,7 @@ The YAML is loaded once at import time from the default path
 (anamol/registry.yaml, resolved relative to this file's location).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
@@ -45,6 +45,11 @@ class ResourceDef:
     name: str           # canonical name — lookup key AND thr_{name}.npy stem
     params: List[str]   # ordered param names that drive this resource's sweep
     enabled: bool
+    # Latency types this resource depends on — subset of {"exe", "fetch"}.
+    # "exe"   → calls resp_cycle() → instr.exe_latency
+    # "fetch" → uses instr.fetch_latency directly
+    # []      → instruction counts only; computed once across all cache configs
+    latency_dependent: List[str] = field(default_factory=list)
 
 
 def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
@@ -86,6 +91,7 @@ def _load(yaml_path: Path) -> tuple[List[ParamDef], List[ResourceDef]]:
             name=r["name"],
             params=list(r["params"]),
             enabled=r.get("enabled", True),
+            latency_dependent=list(r.get("latency_dependent", [])),
         )
         for r in data.get("resources", [])
     ]
@@ -111,6 +117,18 @@ RESOURCE_FILES: List[str] = [f"thr_{r.name}.npy" for r in ENABLED_RESOURCES]
 
 DOUBLE_PARAM_RESOURCES: frozenset = frozenset(
     r.name for r in RESOURCES if len(r.params) > 1
+)
+
+LATENCY_DEPENDENT_RESOURCES: frozenset = frozenset(
+    r.name for r in RESOURCES if r.latency_dependent
+)
+
+EXE_LATENCY_RESOURCES: frozenset = frozenset(
+    r.name for r in RESOURCES if "exe" in r.latency_dependent
+)
+
+FETCH_LATENCY_RESOURCES: frozenset = frozenset(
+    r.name for r in RESOURCES if "fetch" in r.latency_dependent
 )
 
 # {resource_name: [param_name, ...]} — same semantics as old RESOURCE_PARAM_SPECS_BY_KEY

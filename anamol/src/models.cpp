@@ -515,7 +515,8 @@ double get_thr_fetch_buffers(const vector<Instr>& window,
 }
 
 // main entry
-PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
+PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
+                             std::optional<bool> latency_dep_filter) {
   if (instr_trace.empty()) return {};
 
   PerResThrVecs PER_RES_THR_VECS;
@@ -525,10 +526,13 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
 
   size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
 
-  // Collect enabled registry entries once (outside parallel region)
+  // Collect filtered registry entries once (outside parallel region)
   std::vector<const ResourceEntry*> enabled_entries;
   for (const auto& entry : RESOURCE_REGISTRY) {
-    if (entry.enabled) enabled_entries.push_back(&entry);
+    if (!entry.enabled) continue;
+    if (latency_dep_filter.has_value() &&
+        entry.latency_dependent != latency_dep_filter.value()) continue;
+    enabled_entries.push_back(&entry);
   }
 
   // Parallel over resources, parameter sweeps, and windows

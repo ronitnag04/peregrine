@@ -287,6 +287,7 @@ def gen_resource_registry_h(resources: list, params_by_name: dict, out_dir: Path
         name = res["name"]
         enum_name = snake_to_upper(name)
         enabled = "true" if res["enabled"] else "false"
+        latency_dep = "true" if res.get("latency_dependent", []) else "false"
         res_params = res["params"]
 
         # Build the lambda body based on number of params
@@ -306,6 +307,7 @@ def gen_resource_registry_h(resources: list, params_by_name: dict, out_dir: Path
         lines.append(f"        Resource::{enum_name},")
         lines.append(f'        "{name}",')
         lines.append(f"        {enabled},")
+        lines.append(f"        {latency_dep},")
         lines.append(f"        [](const auto& w, const auto& p) {{ return {func_call}; }},")
         lines.append(f"        ParamSweep{{{param_enum_list}}},")
         lines.append("    },")

@@ -15,7 +15,6 @@ PYTHON := python3
 
 SRC_DIR := src
 TESTS_DIR := tests
-TRACE_DIR := traces
 
 BUILD := build
 OBJDIR := $(BUILD)/obj
@@ -23,9 +22,31 @@ OBJDIR := $(BUILD)/obj
 # ---- Parameters ----
 WINDOW_SIZE    ?= 400
 RANDOM_CONFIGS ?= 1000
+SEED           ?=
+# Specific config override (JSON string). When set, --config-json is used instead of --random-configs.
+# Wrap the assignment in single quotes on the command line: 'CONFIG_JSON={"rob_size":256}'
+CONFIG_JSON    ?=
 
-# Trace file
-TRACE_CSV   ?= $(TRACE_DIR)/trace.csv
+# Optional: path to latency .npy produced by annotate_trace.py (enables per-cache-config sweep)
+LATENCIES_NPY  ?=
+# Optional: path to configs JSON produced alongside the .npy (enables latency-dependent lookup)
+CONFIGS_JSON   ?=
+
+# Pass TRACE_DIR=traces/foo to derive all three paths from the trace folder at once.
+# Expects: <folder>/trace.csv, <folder>/trace_latencies.npy, <folder>/trace_configs.json
+# Output goes to output/<folder-name>/  (e.g. output/foo/)
+TRACE_DIR      ?=
+ifneq ($(TRACE_DIR),)
+# Strip trailing slash so notdir works: traces/foo/ → traces/foo
+_TRACE_DIR     := $(patsubst %/,%,$(TRACE_DIR))
+TRACE_CSV      := $(_TRACE_DIR)/trace.csv
+LATENCIES_NPY  := $(_TRACE_DIR)/trace_latencies.npy
+CONFIGS_JSON   := $(_TRACE_DIR)/trace_configs.json
+TRACE_NAME     := $(notdir $(_TRACE_DIR))
+endif
+
+# Trace file (used when TRACE_DIR is not set)
+TRACE_CSV   ?= traces/trace.csv
 # Derive trace name from CSV stem (e.g. collatz_trace_with_latency)
 TRACE_NAME  ?= $(basename $(notdir $(TRACE_CSV)))
 # Per-trace output directory
@@ -135,21 +156,25 @@ $(BUILD)/test_models: $(BUILD)/test_models_omp
 # ---- Run targets ----
 
 main.run: $(BUILD)/main
-	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE) -o $(OUTPUT_DIR)
+	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE) -o $(OUTPUT_DIR) \
+		$(if $(LATENCIES_NPY),-l $(LATENCIES_NPY),)
 
 # Build throughput lookup table for a specific trace
 lookup.run:
 	$(PYTHON) python/build_throughput_lookup.py \
-		-i $(OUTPUT_DIR) -o $(LOOKUP_FILE)
+		-i $(OUTPUT_DIR) -o $(LOOKUP_FILE) \
+		$(if $(CONFIGS_JSON),--configs-json $(CONFIGS_JSON),)
 
-# Generate per-trace training data
+# Generate per-trace training data.
+# Default: random configs. Override with 'CONFIG_JSON={"rob_size":256}' for a specific config.
 training.run:
 	@mkdir -p $(TRAINING_DIR)
 	$(PYTHON) python/gen_training_data.py \
 		--lookup $(LOOKUP_FILE) \
 		--trace $(TRACE_CSV) \
 		--window-size $(WINDOW_SIZE) \
-		--random-configs $(RANDOM_CONFIGS) \
+		$(if $(CONFIG_JSON),--config-json '$(CONFIG_JSON)',--random-configs $(RANDOM_CONFIGS)) \
+		$(if $(SEED),--seed $(SEED),) \
 		-o $(TRAINING_OUT)
 
 # Full pipeline for one trace: simulate → lookup → training

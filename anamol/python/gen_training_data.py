@@ -154,7 +154,10 @@ def _add_cdf_features_to_dict(
     feature_dict[f"{prefix}_mean"] = mean_val
 
 
-def compute_rob_latency_features(output_dir: str = "output") -> pd.DataFrame:
+def compute_rob_latency_features(
+    output_dir: str = "output",
+    config_idx: int | None = None,
+) -> pd.DataFrame:
     """
     Compute ROB latency features from pre-computed .npy files.
 
@@ -168,35 +171,48 @@ def compute_rob_latency_features(output_dir: str = "output") -> pd.DataFrame:
     Total: 11 + 1111 + 1111 + 101 = 2334 features
 
     Args:
-        output_dir: Directory containing the latency .npy files
+        output_dir: Top-level simulator output directory (e.g. "output/foo").
+        config_idx: Cache config index (0-based).  When provided, files are
+            loaded from output_dir/config_<config_idx:04d>/ (Mode B).
+            When None, files are loaded directly from output_dir (Mode A).
 
     Returns:
         DataFrame with 1 row and 2334 columns
 
     Example:
         >>> from gen_training_data import compute_rob_latency_features
-        >>> latency_features = compute_rob_latency_features("output")
+        >>> # Mode A
+        >>> latency_features = compute_rob_latency_features("output/foo")
+        >>> # Mode B — specific cache config
+        >>> latency_features = compute_rob_latency_features("output/foo", config_idx=3)
         >>> print(latency_features.shape)  # (1, 2334)
     """
     from pathlib import Path
 
     output_path = Path(output_dir)
 
-    # Load overall throughput: shape (11, 2) [rob_size, throughput]
-    thr_path = output_path / "rob_latency_overall_thr.npy"
-    if not thr_path.exists():
-        raise FileNotFoundError(f"Latency file not found: {thr_path}")
+    if config_idx is not None:
+        load_path = output_path / f"config_{config_idx:04d}"
+        print(f"\nComputing ROB latency features from: {load_path}")
+    else:
+        load_path = output_path
+        print(f"\nComputing ROB latency features from: {output_dir}")
 
-    overall_thr = np.load(thr_path)  # shape (11, 2)
+    thr_path = load_path / "rob_latency_overall_thr.npy"
+    if not thr_path.exists():
+        raise FileNotFoundError(
+            f"Latency file not found: {thr_path}\n"
+            "For Mode B runs pass config_idx= to select the cache config directory."
+        )
+
+    overall_thr = np.load(thr_path)
+    issue_latencies = np.load(load_path / "rob_latency_issue.npy")
+    commit_latencies = np.load(load_path / "rob_latency_commit.npy")
+    exec_latencies = np.load(load_path / "rob_latency_exec.npy")
+
     rob_sizes = overall_thr[:, 0].astype(int)
     throughputs = overall_thr[:, 1]
 
-    # Load latency distributions: shape (11, k) where k = num_instructions
-    issue_latencies = np.load(output_path / "rob_latency_issue.npy")
-    commit_latencies = np.load(output_path / "rob_latency_commit.npy")
-    exec_latencies = np.load(output_path / "rob_latency_exec.npy")
-
-    print(f"\nComputing ROB latency features from: {output_dir}")
     print(f"  ROB sizes: {rob_sizes.tolist()}")
     print(f"  Number of instructions: {issue_latencies.shape[1]:,}")
 
@@ -509,10 +525,24 @@ def generate_training_matrix(
     # Combine throughput and stall features
     training_data = pd.concat([throughput_df, stall_df], axis=1)
 
-    # Add ROB latency features if requested (same for all configs)
+    # Add ROB latency features if requested.
+    # Mode B: each config has a cache config index → load from the matching
+    #         config_NNNN/ subdirectory, with a per-index cache to avoid redundant I/O.
+    # Mode A: load once from output_dir directly.
     if include_latency_features:
-        latency_features = compute_rob_latency_features(output_dir)
-        latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
+        mode_b = bool(lookup_table._cache_config_to_idx)
+        if mode_b:
+            _rob_cache: dict[int, pd.DataFrame] = {}
+            latency_rows = []
+            for config in configs:
+                idx = lookup_table._cache_config_idx(config)
+                if idx not in _rob_cache:
+                    _rob_cache[idx] = compute_rob_latency_features(output_dir, config_idx=idx)
+                latency_rows.append(_rob_cache[idx])
+            latency_df = pd.concat(latency_rows, ignore_index=True)
+        else:
+            latency_features = compute_rob_latency_features(output_dir)
+            latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
         training_data = pd.concat([training_data, latency_df], axis=1)
 
     # Add config scalar features for each configuration (25 columns per config)
@@ -567,6 +597,16 @@ def main():
         type=int,
         default=400,
         help="Window size for pipeline stall analysis (must match C++ model, default: 400)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory containing simulator output (rob_latency_*.npy files). "
+            "Defaults to the directory of the lookup table. "
+            "For per-cache-config runs, pass a config_NNNN/ subdirectory."
+        ),
     )
 
     # Configuration specification (mutually exclusive)
@@ -639,11 +679,18 @@ def main():
     print(f"Window size: {args.window_size}")
     print()
 
+    # Derive output_dir: explicit flag > directory of lookup table
+    if args.output_dir is not None:
+        output_dir = args.output_dir
+    else:
+        output_dir = str(Path(args.lookup).parent)
+
     training_data = generate_training_matrix(
         configs,
         lookup_table,
         args.trace,
         args.window_size,
+        output_dir=output_dir,
     )
 
     # Save to file (format based on extension)

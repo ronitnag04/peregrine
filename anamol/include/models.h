@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,8 +35,10 @@ using ThrFunc = std::function<double(const std::vector<Instr>&,
 // holds the full vector. models.cpp includes resource_registry.h directly.
 struct ResourceEntry {
   Resource    resource;
-  const char* name;     // canonical name — used as .npy filename stem
-  bool        enabled;  // false → skip sweep, write no output file
+  const char* name;              // canonical name — used as .npy filename stem
+  bool        enabled;           // false → skip sweep, write no output file
+  bool        latency_dependent; // true → throughput depends on exe/fetch_latency;
+                                 //        must be re-run per cache config
   ThrFunc     func;
   ParamSweep  sweep;
 };
@@ -57,8 +60,12 @@ using PerResThrVecs =
 ////////////////////////////////////////////////////////////////////////////
 // Main Entry
 ////////////////////////////////////////////////////////////////////////////
+// latency_dep_filter: nullopt → run all enabled resources (default, existing behaviour)
+//                     true   → run only enabled && latency_dependent resources
+//                     false  → run only enabled && !latency_dependent resources
 PerResThrVecs get_throughput(std::vector<Instr> instr_trace,
-                             int window_size = 400);
+                             int window_size = 400,
+                             std::optional<bool> latency_dep_filter = std::nullopt);
 
 void export_throughputs(PerResThrVecs PER_RES_THR_VECS, const std::string& output_dir);
 

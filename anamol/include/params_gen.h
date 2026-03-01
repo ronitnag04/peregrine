@@ -50,22 +50,22 @@ inline constexpr uint16_t L1D_STRIDE_PREFETCH_VALS[] = {0, 4};
 }  // namespace detail
 
 inline constexpr std::array<ParamRange, (size_t)ParamType::COUNT> PARAM_RANGES = {{
-    {1, 1024, PARAM_STEP},  // ROB_SIZE
-    {1, 12, PARAM_STEP},  // COMMIT_WIDTH
-    {1, 256, PARAM_STEP},  // LOAD_QUEUE_SIZE
-    {1, 256, PARAM_STEP},  // STORE_QUEUE_SIZE
-    {1, 8, PARAM_STEP},  // ALU_ISSUE_WIDTH
-    {1, 8, PARAM_STEP},  // ALU_MULT_DIV_ISSUE_WIDTH
-    {1, 8, PARAM_STEP},  // FP_ISSUE_WIDTH
-    {1, 8, PARAM_STEP},  // FP_MULT_DIV_ISSUE_WIDTH
-    {1, 8, PARAM_STEP},  // LS_ISSUE_WIDTH
-    {1, 8, PARAM_STEP},  // NUM_LS_PIPES
-    {0, 8, PARAM_STEP},  // NUM_LOAD_PIPES
-    {1, 12, PARAM_STEP},  // FETCH_WIDTH
-    {1, 12, PARAM_STEP},  // DECODE_WIDTH
-    {1, 12, PARAM_STEP},  // RENAME_WIDTH
+    {1, 1024, StepType::LINEAR},  // ROB_SIZE
+    {1, 12, StepType::LINEAR},  // COMMIT_WIDTH
+    {1, 256, StepType::LINEAR},  // LOAD_QUEUE_SIZE
+    {1, 256, StepType::LINEAR},  // STORE_QUEUE_SIZE
+    {1, 8, StepType::LINEAR},  // ALU_ISSUE_WIDTH
+    {1, 8, StepType::LINEAR},  // ALU_MULT_DIV_ISSUE_WIDTH
+    {1, 8, StepType::LINEAR},  // FP_ISSUE_WIDTH
+    {1, 8, StepType::LINEAR},  // FP_MULT_DIV_ISSUE_WIDTH
+    {1, 16, StepType::LINEAR},  // LS_ISSUE_WIDTH
+    {1, 8, StepType::LINEAR},  // NUM_LS_PIPES
+    {1, 8, StepType::LINEAR},  // NUM_LOAD_PIPES
+    {1, 12, StepType::LINEAR},  // FETCH_WIDTH
+    {1, 12, StepType::LINEAR},  // DECODE_WIDTH
+    {1, 12, StepType::LINEAR},  // RENAME_WIDTH
     {1, 8, PARAM_STEP},  // NUM_FETCH_BUFFERS
-    {1, 32, PARAM_STEP},  // MAX_ICACHE_FILLS
+    {1, 32, StepType::LINEAR},  // MAX_ICACHE_FILLS
     {0, 1, StepType::LINEAR},  // BRANCH_PREDICTOR
     {0, 100, StepType::LINEAR},  // MISPREDICTION_PERCENT
     {16, 256, PARAM_STEP},  // L1D_CACHE_KB
