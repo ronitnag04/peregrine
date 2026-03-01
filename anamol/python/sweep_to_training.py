@@ -163,11 +163,22 @@ def _config_to_hash(config: models.Config) -> str:
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
+def _load_bp_rate(trace_dir: Path, branch_predictor: int) -> Optional[float]:
+    """Load misprediction rate for this BP type from trace_bp.json. Returns None if missing."""
+    bp_json = trace_dir / "trace_bp.json"
+    if not bp_json.exists():
+        return None
+    with open(bp_json) as f:
+        data = json.load(f)
+    bp_name = "local" if branch_predictor == 0 else "tage"
+    return data.get(bp_name)
+
+
 def _get_config_idx(trace_dir: Path, config: models.Config) -> Optional[int]:
     """
     Look up the cache config index for this config in trace_configs.json.
 
-    The JSON format is: {"configs": [[l1i_kb, l1d_kb, l2_kb, bp_int], ...]}
+    The JSON format is: {"configs": [[l1i_kb, l1d_kb, l2_kb], ...]}
     Returns None if the config is not found.
     """
     configs_path = trace_dir / "trace_configs.json"
@@ -181,7 +192,6 @@ def _get_config_idx(trace_dir: Path, config: models.Config) -> Optional[int]:
         config.l1i_cache_kb,
         config.l1d_cache_kb,
         config.l2_cache_kb,
-        config.branch_predictor,
     ]
     for idx, cfg in enumerate(meta.get("configs", [])):
         if list(cfg) == target:
@@ -404,6 +414,11 @@ def process_sweep_csv(
             print(f"  WARNING: Failed to parse config: {e} — skipping row")
             continue
 
+        # Populate misprediction_percent from trace BP sim results
+        bp_rate = _load_bp_rate(trace_dir, config.branch_predictor)
+        if bp_rate is not None:
+            config.misprediction_percent = round(bp_rate * 100)
+
         # Deterministic cache directory per (benchmark, config)
         config_hash = _config_to_hash(config)
         row_output_dir = output_dir / benchmark / config_hash
@@ -493,6 +508,10 @@ def _process_single_row(
     except Exception as e:
         print(f"  WARNING: Failed to parse config: {e} — skipping row")
         return None
+
+    bp_rate = _load_bp_rate(trace_dir, config.branch_predictor)
+    if bp_rate is not None:
+        config.misprediction_percent = round(bp_rate * 100)
 
     try:
         row_df = generate_training_matrix(

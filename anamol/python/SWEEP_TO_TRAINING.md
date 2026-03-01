@@ -107,10 +107,10 @@ files from the `training/` directory and concatenates them into a single matrix
 
 ### `gen_cache_latencies.py` (repo root)
 
-Runs the cache and branch predictor simulation across all parameter
-combinations for a trace, producing:
-- `<trace_dir>/trace_latencies.npy` — shape `(N_configs, N_instrs, 2)` with
-  per-instruction fetch and exec latencies
+Runs the **cache simulation** across all L1I × L1D × L2 cache parameter
+combinations for a trace (100 configs), producing:
+- `<trace_dir>/trace_latencies.npy` — shape `(100, N_instrs, 2)` with
+  per-instruction fetch and exec latencies for each cache config
 - `<trace_dir>/trace_configs.json` — the config grid so C++ can look up the
   config index
 
@@ -118,6 +118,24 @@ The latency `.npy` is fed to anamol via `-l`, enabling latency-dependent
 resources (ROB, load queue, etc.) to vary by cache config. This is what allows
 `_get_config_idx()` in `sweep_to_training.py` to select the right per-cache-config
 throughput subdir.
+
+Run via: `make gen_latencies.run TRACE_CSV=<path>` or
+`python gen_cache_latencies.py <trace.csv>`
+
+---
+
+### `gen_bp_rates.py` (repo root)
+
+Runs the **branch predictor simulation** for a trace, producing:
+- `<trace_dir>/trace_bp.json` — `{"local": <float>, "tage": <float>}` with
+  per-predictor misprediction rates in [0, 1]
+
+BP simulation is independent of cache configs and only needs to be run once
+per trace. `sweep_to_training.py` reads `trace_bp.json` via `_load_bp_rate()`
+to populate `config.misprediction_percent` before generating training features.
+
+Run via: `make gen_bp.run TRACE_CSV=<path>` or
+`python gen_bp_rates.py <trace.csv>`
 
 ---
 

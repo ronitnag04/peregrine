@@ -75,7 +75,7 @@ class ThroughputLookupTable:
         self.resource_order = []
         self._column_names = None
 
-        # Cache config mapping: (l1i_kb, l1d_kb, l2_kb, bp_id) -> idx
+        # Cache config mapping: (l1i_kb, l1d_kb, l2_kb) -> idx
         self._cache_config_to_idx: Dict[Tuple[int, ...], int] = {}
         if configs_json is not None:
             self._load_configs_json(configs_json)
@@ -93,8 +93,7 @@ class ThroughputLookupTable:
 
     def _cache_config_idx(self, config) -> int:
         """Map a Config's cache parameters to the cache config index."""
-        key = (config.l1i_cache_kb, config.l1d_cache_kb,
-               config.l2_cache_kb, config.branch_predictor)
+        key = (config.l1i_cache_kb, config.l1d_cache_kb, config.l2_cache_kb)
         idx = self._cache_config_to_idx.get(key)
         if idx is None:
             raise ValueError(
@@ -200,8 +199,8 @@ class ThroughputLookupTable:
         Get the full feature vector for a microarchitecture config.
 
         For latency-dependent resources, config must include cache parameters
-        (l1i_cache_kb, l1d_cache_kb, l2_cache_kb, branch_predictor) that map
-        to a cache config index via the loaded configs.json.
+        (l1i_cache_kb, l1d_cache_kb, l2_cache_kb) that map to a cache config
+        index via the loaded configs.json.
         """
         latency_dep = registry.LATENCY_DEPENDENT_RESOURCES
         feature_vectors = []

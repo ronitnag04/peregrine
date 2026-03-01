@@ -27,7 +27,7 @@ SEED           ?=
 # Wrap the assignment in single quotes on the command line: 'CONFIG_JSON={"rob_size":256}'
 CONFIG_JSON    ?=
 
-# Optional: path to latency .npy produced by annotate_trace.py (enables per-cache-config sweep)
+# Optional: path to latency .npy produced by gen_cache_latencies.py (enables per-cache-config sweep)
 LATENCIES_NPY  ?=
 # Optional: path to configs JSON produced alongside the .npy (enables latency-dependent lookup)
 CONFIGS_JSON   ?=
@@ -153,7 +153,19 @@ $(BUILD)/test_models_noomp: $(filter-out $(OBJDIR)/models.o,$(OBJS_TEST_MODELS))
 $(BUILD)/test_models: $(BUILD)/test_models_omp
 	cp $< $@
 
+# Paths to trace-annotation scripts at the repo root (one level up from anamol/)
+GEN_CACHE_LATENCIES ?= ../gen_cache_latencies.py
+GEN_BP_RATES        ?= ../gen_bp_rates.py
+
 # ---- Run targets ----
+
+# Generate per-cache-config latency .npy and configs JSON for a trace
+gen_latencies.run:
+	$(PYTHON) $(GEN_CACHE_LATENCIES) $(TRACE_CSV)
+
+# Generate BP misprediction rates JSON for a trace
+gen_bp.run:
+	$(PYTHON) $(GEN_BP_RATES) $(TRACE_CSV)
 
 main.run: $(BUILD)/main
 	$< -t $(TRACE_CSV) -w $(WINDOW_SIZE) -o $(OUTPUT_DIR) \
@@ -288,7 +300,7 @@ clean:
 clean-gen:
 	rm -f $(GENERATED_HEADERS) $(GENERATED_PY)
 
-.PHONY: all clean clean-gen prep main.run parser.run test_parser.run \
+.PHONY: all clean clean-gen prep gen_latencies.run gen_bp.run main.run parser.run test_parser.run \
 		test_params.run test_models.run test_models_omp.run test_models_noomp.run \
 		benchmark anamol anamol.run visualize.run \
 		lookup.run training.run pipeline.run all_traces.run consolidate.run \
