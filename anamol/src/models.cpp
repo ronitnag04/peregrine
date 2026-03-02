@@ -1,5 +1,4 @@
 #include "models.h"
-#include "resource_registry.h"  // RESOURCE_REGISTRY (generated)
 
 #include <cassert>
 #include <cstdio>
@@ -12,6 +11,7 @@
 
 #include "instr.h"
 #include "params.h"
+#include "resource_registry.h"  // RESOURCE_REGISTRY (generated)
 
 namespace analytical {
 
@@ -19,6 +19,16 @@ using std::vector;
 
 const uint64_t CACHE_LINE_SIZE = 64;
 const uint64_t LARGE_CONSTANT = 1000000000ULL;
+
+// Sentinel throughput returned when a resource is not a bottleneck for this
+// window (no relevant instruction type present, or zero issue width).
+// Swap the active return to experiment:
+//   static_cast<double>(window.size())        natural window ceiling (current)
+//   std::numeric_limits<double>::infinity()   true "infinity"
+//   0.0                                       treat as fully blocking
+inline double unbottlenecked_thr(size_t window_size) {
+  return static_cast<double>(window_size);
+}
 
 ////////////////////////////////////////////////////////////////////////////
 // Base calculations
@@ -138,7 +148,7 @@ double get_thr_load_queue(const vector<Instr>& window,
   }
 
   // If no loads, this resource is not a bottleneck
-  if (loads.empty()) return window.size();
+  if (loads.empty()) return unbottlenecked_thr(window.size());
 
   uint32_t k = window.size();
   uint32_t n_loads = loads.size();
@@ -183,7 +193,7 @@ double get_thr_load_queue(const vector<Instr>& window,
   uint32_t total_cycles = commit[n_loads - 1];
 
   // Edge case: if all loads complete at cycle 0
-  if (total_cycles == 0) return window.size();
+  if (total_cycles == 0) return unbottlenecked_thr(window.size());
 
   return (double)k / total_cycles;
 }
@@ -200,7 +210,7 @@ double get_thr_store_queue(const vector<Instr>& window,
   }
 
   // If no stores, this resource is not a bottleneck
-  if (stores.empty()) return window.size();
+  if (stores.empty()) return unbottlenecked_thr(window.size());
 
   uint32_t k = window.size();
   uint32_t n_stores = stores.size();
@@ -245,7 +255,7 @@ double get_thr_store_queue(const vector<Instr>& window,
   uint32_t total_cycles = commit[n_stores - 1];
 
   // Edge case: if all stores complete at cycle 0
-  if (total_cycles == 0) return window.size();
+  if (total_cycles == 0) return unbottlenecked_thr(window.size());
 
   return (double)k / total_cycles;
 }
@@ -260,10 +270,10 @@ double get_thr_alu_issue(const vector<Instr>& window,
   }
 
   // Handle edge case: no ALU instructions
-  if (n_alu == 0) return window.size();
+  if (n_alu == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_issue_width == 0) return window.size();
+  // if (alu_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_alu / alu_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -281,10 +291,10 @@ double get_thr_alu_mult_div_issue(const vector<Instr>& window,
   }
 
   // Handle edge case: no MUL/DIV instructions
-  if (n_mult_div == 0) return window.size();
+  if (n_mult_div == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_mult_div_issue_width == 0) return window.size();
+  // if (alu_mult_div_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_mult_div / alu_mult_div_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -301,10 +311,10 @@ double get_thr_fp_issue(const vector<Instr>& window, uint16_t fp_issue_width) {
   }
 
   // Handle edge case: no FP instructions
-  if (n_fp == 0) return window.size();
+  if (n_fp == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (fp_issue_width == 0) return window.size();
+  // if (fp_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_fp / fp_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -322,10 +332,10 @@ double get_thr_fp_mult_div_issue(const vector<Instr>& window,
   }
 
   // Handle edge case: no FP mult/div instructions
-  if (n_fp_mult_div == 0) return window.size();
+  if (n_fp_mult_div == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (fp_mult_div_issue_width == 0) return window.size();
+  // if (fp_mult_div_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_fp_mult_div / fp_mult_div_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -342,10 +352,10 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
   }
 
   // Handle edge case: no Load/Store instructions
-  if (n_ls == 0) return window.size();
+  if (n_ls == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (ls_issue_width == 0) return window.size();
+  // if (ls_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_ls / ls_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -355,7 +365,8 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
 
 // 7. Load/Load-Store Pipes Lower Bound Throughput
 double get_thr_load_ls_pipes_lower(const vector<Instr>& window,
-                                   uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes) {
   // Based on worst-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -363,19 +374,18 @@ double get_thr_load_ls_pipes_lower(const vector<Instr>& window,
     n_store += instr.is_store;
   }
 
-  if (n_load == 0 && n_store == 0) return window.size();
+  if (n_load == 0 && n_store == 0) return unbottlenecked_thr(window.size());
 
   double t_max = (double)n_load / (num_ls_pipes + num_load_pipes) +
                  (double)n_store / num_ls_pipes;
-
-  if (t_max == 0) return window.size();
 
   return window.size() / t_max;
 }
 
 // 8. Load/Load-Store Pipes Upper Bound Throughput
 double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
-                                   uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes) {
   // Based on best-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -383,7 +393,7 @@ double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
     n_store += instr.is_store;
   }
 
-  if (n_load == 0 && n_store == 0) return window.size();
+  if (n_load == 0 && n_store == 0) return unbottlenecked_thr(window.size());
 
   // Best-case: stores use LSPs while loads use LPs concurrently
   // Time to complete all stores using LS pipes
@@ -398,7 +408,6 @@ double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
   // Remaining loads share LS pipes after stores complete
   double t_min = t_store + n_remaining_load / (num_ls_pipes + num_load_pipes);
 
-  if (t_min == 0) return window.size();
 
   return window.size() / t_min;
 }
