@@ -9,10 +9,10 @@ Anamol is the analytical modeling component of Peregrine. It simulates microarch
 | Document | Description |
 |---|---|
 | **[README.md](README.md)** | ← you are here — architecture, workflow steps, Python API |
-| [gen_training_data.md](gen_training_data.md) | Lookup table → training data pipeline explained |
-| [SWEEP_TO_TRAINING.md](SWEEP_TO_TRAINING.md) | `sweep_to_training.py` design notes and usage |
-| [TRAINING_COLUMNS.md](TRAINING_COLUMNS.md) | Full column reference for the training matrix |
-| [Notes.md](Notes.md) | Analytical modeling research notes |
+| [gen_training_data.md](docs/gen_training_data.md) | Lookup table → training data pipeline explained |
+| [SWEEP_TO_TRAINING.md](docs/SWEEP_TO_TRAINING.md) | `sweep_to_training.py` design notes and usage |
+| [TRAINING_COLUMNS.md](docs/TRAINING_COLUMNS.md) | Full column reference for the training matrix |
+| [Notes.md](docs/Notes.md) | Analytical modeling research notes |
 
 ---
 
