@@ -408,7 +408,6 @@ double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
   // Remaining loads share LS pipes after stores complete
   double t_min = t_store + n_remaining_load / (num_ls_pipes + num_load_pipes);
 
-
   return window.size() / t_min;
 }
 
@@ -547,7 +546,8 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
   for (const auto& entry : RESOURCE_REGISTRY) {
     if (!entry.enabled) continue;
     if (latency_dep_filter.has_value() &&
-        entry.latency_dependent != latency_dep_filter.value()) continue;
+        entry.latency_dependent != latency_dep_filter.value())
+      continue;
 
     size_t res_idx = static_cast<size_t>(entry.resource);
     auto& vecs = PER_RES_THR_VECS[res_idx];
@@ -590,7 +590,8 @@ PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
   return PER_RES_THR_VECS;
 }
 
-// Single-config throughput: computes throughput for exactly one set of param values.
+// Single-config throughput: computes throughput for exactly one set of param
+// values.
 PerResThrVecs get_throughput_single_config(
     vector<Instr> instr_trace, int window_size,
     const std::map<std::string, uint16_t>& config,
@@ -611,7 +612,8 @@ PerResThrVecs get_throughput_single_config(
   for (const auto& entry : RESOURCE_REGISTRY) {
     if (!entry.enabled) continue;
     if (latency_dep_filter.has_value() &&
-        entry.latency_dependent != latency_dep_filter.value()) continue;
+        entry.latency_dependent != latency_dep_filter.value())
+      continue;
 
     // Build param vector from config using entry.param_names
     std::vector<uint16_t> params;
@@ -814,7 +816,8 @@ static void write_npy_2d_float64(const std::string& filename, size_t rows,
   ofs.close();
 }
 
-void export_throughputs(PerResThrVecs PER_RES_THR_VECS, const std::string& output_dir) {
+void export_throughputs(PerResThrVecs PER_RES_THR_VECS,
+                        const std::string& output_dir) {
   // Ensure output directory exists.
   std::system(("mkdir -p " + output_dir).c_str());
 
@@ -882,8 +885,8 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data,
       thr_data[i * 2 + 0] = latency_data[i].rob_size;
       thr_data[i * 2 + 1] = latency_data[i].overall_throughput;
     }
-    write_npy_2d_float64(output_dir + "/rob_latency_overall_thr.npy", num_rob_sizes, 2,
-                         thr_data);
+    write_npy_2d_float64(output_dir + "/rob_latency_overall_thr.npy",
+                         num_rob_sizes, 2, thr_data);
     std::cout << "  Wrote rob_latency_overall_thr.npy (" << num_rob_sizes
               << " x 2)\n";
   }
