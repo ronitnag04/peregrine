@@ -69,6 +69,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the Peregrine ML model using PyTorch and XLA with the AWS Neuron SDK.")
     parser.add_argument(
+        "-d",
         "--dataset-path",
         help="Path to the Peregrine dataset csv file",
     )
@@ -79,6 +80,10 @@ def main() -> None:
     args = parse_args()
     dataset_name = os.path.basename(args.dataset_path).split('.')[0]
     dataset = load_dataset(args.dataset_path)
+
+    # dataset = dataset.sample(frac=0.5)
+    print(f'Dataset size: {dataset.shape[0]}')
+
     train_dataset, test_dataset = train_test_split(dataset, test_size=0.25, random_state=42)
 
     train_features = train_dataset.drop(columns=["cpi", "branch_predictor", "l1d_stride_prefetch"])
@@ -103,11 +108,11 @@ def main() -> None:
     test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
 
     device = "xla"
-    epochs = 1500
+    epochs = 200
     model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001) #, weight_decay=0.3)
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
-    loss_fn = nn.MSELoss()
+    loss_fn = nn.L1Loss()
 
     print('----------- Start Training --------------')
     epochs_data: list[dict[str, float]] = []

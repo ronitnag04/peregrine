@@ -74,6 +74,7 @@ def parse_args() -> argparse.Namespace:
         description="Plot training/eval losses and percent error from a metrics JSON file.",
     )
     parser.add_argument(
+        "-t", 
         "--training-metrics",   
         type=Path,
         help="Path to the training_metrics JSON file (e.g. training_metrics/collatz-pin_metrics.json).",

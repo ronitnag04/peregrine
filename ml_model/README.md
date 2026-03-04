@@ -20,7 +20,7 @@ This folder contains the ML Model and associated scripts for the Peregrine Neura
 
 ### 0. Source the Neuron Environment
 ```bash
-source /opt/aws_neuronx_venv_pytorch_2_8/bin/activate
+source /opt/aws_neuronx_venv_pytorch_2_9/bin/activate
 ```
 Note that the exact path may be different depending on the AMI version you are using.
 
