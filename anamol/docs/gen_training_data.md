@@ -66,7 +66,6 @@ make gen_latencies.run TRACE_CSV=traces/foo-pin/trace.csv
 ```
 
 ### 2. Build
-pass `CXX=<g++ path>`
 ```bash
 make
 ```
