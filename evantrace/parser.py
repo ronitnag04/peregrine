@@ -3,6 +3,8 @@ Parser class for PIN instruction trace CSV files. Converts
 trace into a list of instruction objects.
 """
 import csv
+from collections.abc import Iterator
+
 import numpy as np
 from evantrace.x86.opcodes import Opcode
 from evantrace.x86.registers import Register
@@ -23,25 +25,21 @@ class Parser:
         """
         self.filepath: str = filepath
 
-    # --- Public Main Method ---
-    
-    def parse(self) -> list[Instruction]:
+    # --- Public Main Methods ---
+
+    def iter_instructions(self) -> Iterator[Instruction]:
         """
-        Parses the CSV file specified in the constructor.
-        
-        Returns:
-            List[Instruction]: A list of parsed Instruction objects.
+        Lazily parses the CSV file specified in the constructor, yielding
+        one Instruction at a time. This avoids materializing the full trace
+        in memory at once.
         """
-        instructions: list[Instruction] = []
-        
         with open(self.filepath, mode='r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             
             for i, row in enumerate(reader):
                 opcode = self._parse_opcode(row['Opcode'])
                 if opcode is None:
-                    print(f"Skipping row {i+2}: Missing or unknown opcode '{row['Opcode']}'.")
-                    continue
+                    raise ValueError(f"Unknown opcode: {row['Opcode']}")
 
                 branch_type = self._parse_branch_type(row['Branch Type'])
                 if branch_type is None:
@@ -51,7 +49,7 @@ class Parser:
                     branch_taken = self._parse_bool(row['Branch Taken'])
                     branch_target_addr = np.uint64(int(row['Branch Target Address'], 16))
 
-                inst = Instruction(
+                yield Instruction(
                     inst_ptr=np.uint64(int(row['IP'], 16)),
                     assembly=row['Assembly'],
                     category=row['Category'],
@@ -67,9 +65,22 @@ class Parser:
                     write_addrs=self._parse_addr_list(row['Write Addresses']),
                     mem_dependent_ips=self._parse_addr_list(row['Memory Dependent IPs'])
                 )
-                instructions.append(inst)
 
-        return instructions
+    def parse(self) -> list[Instruction]:
+        """
+        Parses the CSV file specified in the constructor and returns a list
+        of Instruction objects. This eagerly materializes the entire trace.
+        """
+        return list(self.iter_instructions())
+
+    def count_instructions(self) -> int:
+        """
+        Returns the number of instructions (rows) in the trace without
+        materializing Instruction objects.
+        """
+        with open(self.filepath, mode='r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            return sum(1 for _ in reader)
 
     # --- Private Helper Methods ---
 

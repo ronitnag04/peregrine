@@ -34,18 +34,21 @@ from evantrace.caches import Cache
 from evantrace.cache_sim import CacheSim
 
 # ── per-process shared state (set once via initializer) ──────────────────────
-_instructions = None
+_trace_filename: str | None = None
 
 
-def _init_worker(instr_list):
-    global _instructions
-    _instructions = instr_list
+def _init_worker(trace_filename: str):
+    global _trace_filename
+    _trace_filename = trace_filename
 
 
 def _worker(args):
     """Run one cache config in a worker process. Returns (config_index, uint16 array)."""
+    if _trace_filename is None:
+        raise RuntimeError("Worker invoked before trace filename was initialized")
+
     idx, l1i_kb, l1d_kb, l2_kb = args
-    latencies = run_sim(_instructions, l1i_kb, l1d_kb, l2_kb)
+    latencies = run_sim(_trace_filename, l1i_kb, l1d_kb, l2_kb)
     # shape (N, 2): col 0 = fetch_latency, col 1 = exec_latency
     return idx, np.array(latencies, dtype=np.uint16)
 
@@ -63,7 +66,7 @@ L1_READ_LAT = 2   # gem5 L1 hit: tag_latency + data_latency = 1 + 1
 L2_READ_LAT = 20  # gem5 L2 hit: tag_latency + data_latency = 10 + 10
 
 
-def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int):
+def run_sim(trace_filename: str, l1i_kb: int, l1d_kb: int, l2_kb: int):
     """Simulate one cache config. Returns list of (fetch_latency, exec_latency)."""
     l2cache = Cache(
         associativity=L2_ASSOC,
@@ -82,13 +85,18 @@ def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int):
         read_latency=L1_READ_LAT,
         parent=l2cache,
     )
-    CacheSim(
-        trace=instructions,
-        icache=icache,
-        dcache=dcache,
-        l2cache=l2cache,
-    ).run()
-    return [(instr.fetch_latency, instr.exec_latency) for instr in instructions]
+
+    parser = Parser(trace_filename)
+    trace_iter = parser.iter_instructions()
+    latencies = list(
+        CacheSim(
+            trace=trace_iter,
+            icache=icache,
+            dcache=dcache,
+            l2cache=l2cache,
+        ).run()
+    )
+    return latencies
 
 
 def main():
@@ -98,11 +106,12 @@ def main():
 
     trace_filename = sys.argv[1]
     print(f"Parsing: {trace_filename}")
-    instructions = Parser(trace_filename).parse()
-    if not instructions:
+    parser = Parser(trace_filename)
+    N = parser.count_instructions()
+    if N == 0:
         print("Error: no instructions parsed — check trace file.")
         sys.exit(1)
-    print(f"  {len(instructions)} instructions")
+    print(f"  {N} instructions")
 
     configs = list(product(L1_KB, L1_KB, L2_KB))
     n = len(configs)
@@ -114,13 +123,11 @@ def main():
     out_npy = os.path.join(trace_dir, f"{stem}_latencies.npy")
     out_json = os.path.join(trace_dir, f"{stem}_configs.json")
     tmp_path = os.path.join(trace_dir, f".{stem}_latencies_tmp.npy")
-
-    N = len(instructions)
     tasks = [(i, l1i, l1d, l2) for i, (l1i, l1d, l2) in enumerate(configs)]
 
     # try on one config first
     idx, l1i, l1d, l2 = tasks[0]
-    latencies = run_sim(instructions, l1i, l1d, l2)
+    latencies = run_sim(trace_filename, l1i, l1d, l2)
 
     renamed = False
     mmap = None
@@ -133,7 +140,7 @@ def main():
         with ProcessPoolExecutor(
             max_workers=n_workers,
             initializer=_init_worker,
-            initargs=(instructions,),
+            initargs=(trace_filename,),
         ) as executor:
             futures = {executor.submit(_worker, task): task[0] for task in tasks}
             done = 0
