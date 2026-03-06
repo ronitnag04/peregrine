@@ -1,3 +1,5 @@
+from collections.abc import Iterable
+
 from evantrace.x86.instructions import Instruction
 from evantrace.branch_predictor import BranchPredictor
 
@@ -9,10 +11,10 @@ class BPSim:
     
     def __init__(
         self,
-        trace: list[Instruction],
+        trace: Iterable[Instruction],
         branch_predictor: BranchPredictor
     ):
-        self.trace: list[Instruction] = trace
+        self.trace: Iterable[Instruction] = trace
         self.branch_predictor: BranchPredictor = branch_predictor
 
     def run(self):

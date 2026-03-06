@@ -25,11 +25,12 @@ def main():
 
     trace_filename = sys.argv[1]
     print(f"Parsing: {trace_filename}")
-    instructions = Parser(trace_filename).parse()
-    if not instructions:
+    parser = Parser(trace_filename)
+    n_instructions = parser.count_instructions()
+    if n_instructions == 0:
         print("Error: no instructions parsed — check trace file.")
         sys.exit(1)
-    print(f"  {len(instructions)} instructions")
+    print(f"  {n_instructions} instructions")
 
     trace_dir = os.path.dirname(os.path.abspath(trace_filename))
     stem = os.path.splitext(os.path.basename(trace_filename))[0]
@@ -41,7 +42,9 @@ def main():
             bp = LocalBranchPredictor()
         else:
             bp = TAGEBranchPredictor()
-        BPSim(trace=instructions, branch_predictor=bp).run()
+        # Use a fresh iterator over the trace for each predictor so we
+        # never materialize the full instruction list in memory.
+        BPSim(trace=parser.iter_instructions(), branch_predictor=bp).run()
         rate = bp.get_misprediction_rate()
         bp_results[bp_name] = rate
         print(f"  {bp_name}: {rate:.4f} misprediction rate")
