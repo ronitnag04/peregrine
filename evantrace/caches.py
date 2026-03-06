@@ -4,7 +4,10 @@ from numpy.typing import NDArray
 
 from evantrace.replacement_policies import ReplacementPolicy
 
-MAIN_MEMORY_LATENCY = 100 # latency of main memory accesses in cycles
+# Match current gem5 setup: SingleChannelDDR4_2400 @ 3GHz.
+# https://raw.githubusercontent.com/umd-memsys/DRAMsim3/master/configs/DDR4_4Gb_x8_2400.ini
+# tRCD + tCL ≈ 14.16 + 14.16 ns → ~85 cycles. (Paper used 200; if we rerun gem5 to match paper, increase here.)
+MAIN_MEMORY_LATENCY = 85  # latency of main memory accesses in cycles
 
 """
 Representation of a hardware cache, with configurable line size, total size, associativity,

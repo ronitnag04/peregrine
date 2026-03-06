@@ -18,13 +18,6 @@ from evantrace.parser import Parser
 from evantrace.bp_sim import BPSim
 from evantrace.branch_predictor import LocalBranchPredictor, TAGEBranchPredictor
 
-
-def make_bp(bp_id: int):
-    if bp_id == 0:
-        return LocalBranchPredictor(local_predictor_size=2048, local_ctr_bits=2)
-    return TAGEBranchPredictor()
-
-
 def main():
     if len(sys.argv) != 2:
         print("Usage: python gen_bp_rates.py <trace.csv>")
@@ -43,8 +36,11 @@ def main():
     out_bp = os.path.join(trace_dir, f"{stem}_bp.json")
 
     bp_results = {}
-    for bp_id, bp_name in [(0, "local"), (1, "tage")]:
-        bp = make_bp(bp_id)
+    for bp_name in ["local", "tage"]:
+        if bp_name == "local":
+            bp = LocalBranchPredictor()
+        else:
+            bp = TAGEBranchPredictor()
         BPSim(trace=instructions, branch_predictor=bp).run()
         rate = bp.get_misprediction_rate()
         bp_results[bp_name] = rate

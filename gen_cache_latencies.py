@@ -54,11 +54,13 @@ def _worker(args):
 L1_KB = [16, 32, 64, 128, 256]  # L1I and L1D
 L2_KB = [512, 1024, 2048, 4096]  # L2
 
-# Cache fixed parameters
+# Cache fixed parameters: match peregrine-gem5 L1/L2 defaults (tag+data cycles).
+# gem5 L1ICache/L1DCache: tag_latency=1, data_latency=1 → 2 cycles. L2Cache: tag=10, data=10 → 20.
+# Paper: L1=4, L2=10, RAM=200. If we rerun gem5 to match paper, revert to those.
 L1_ASSOC = 8
 L2_ASSOC = 16
-L1_READ_LAT = 4
-L2_READ_LAT = 12
+L1_READ_LAT = 2   # gem5 L1 hit: tag_latency + data_latency = 1 + 1
+L2_READ_LAT = 20  # gem5 L2 hit: tag_latency + data_latency = 10 + 10
 
 
 def run_sim(instructions, l1i_kb: int, l1d_kb: int, l2_kb: int):
@@ -115,6 +117,10 @@ def main():
 
     N = len(instructions)
     tasks = [(i, l1i, l1d, l2) for i, (l1i, l1d, l2) in enumerate(configs)]
+
+    # try on one config first
+    idx, l1i, l1d, l2 = tasks[0]
+    latencies = run_sim(instructions, l1i, l1d, l2)
 
     renamed = False
     mmap = None
