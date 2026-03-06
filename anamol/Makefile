@@ -230,14 +230,18 @@ SWEEP_OUT              ?= $(TRAINING_DIR)/sweep_training.$(SWEEP_FORMAT)
 SWEEP_PRECOMPUTED_DIR  ?=
 # Number of parallel worker threads for sweep_training.run (default: os.cpu_count())
 SWEEP_WORKERS          ?=
+# Directory containing benchmark folders with trace CSV files (default: traces/)
+SWEEP_TRACES_DIR       ?= traces
+# Intermediate output directory for sweep_training.run (default: .cache/sweep_out)
+SWEEP_CACHE_DIR        ?= .cache/sweep_out
 
 sweep_training.run:
 	@mkdir -p $(TRAINING_DIR)
 	$(PYTHON) python/sweep_to_training.py \
 		--sweep-csv $(SWEEP_CSV) \
-		--traces-dir traces \
+		--traces-dir $(SWEEP_TRACES_DIR) \
 		--window-size $(WINDOW_SIZE) \
-		--output-dir .cache/sweep_out \
+		--output-dir $(SWEEP_CACHE_DIR) \
 		--format $(SWEEP_FORMAT) \
 		-o $(SWEEP_OUT) \
 		$(if $(BENCHMARKS),--benchmarks $(BENCHMARKS),) \
