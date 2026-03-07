@@ -81,11 +81,11 @@ make main.run TRACE_DIR=traces/foo-pin
 
 ```bash
 make sweep_training.run \
-    SWEEP_PRECOMPUTED_DIR=output \   # point to anamol output from step 3
-    BENCHMARKS=foo,bar \             # optional: filter to specific benchmarks
-    SWEEP_TRACES_DIR=traces \        # optional: where benchmark folders with trace CSVs live (default: traces/)
-    SWEEP_FORMAT=csv \               # optional: pkl (default) or csv
-    SWEEP_OUT=training/my_training.csv  # optional: output path
+    SWEEP_PRECOMPUTED_DIR=output \
+    BENCHMARKS=foo,bar \
+    SWEEP_TRACES_DIR=traces \
+    SWEEP_FORMAT=csv \
+    SWEEP_OUT=training/my_training.csv
 ```
 
 `SWEEP_CSV` defaults to the latest sweep dir in the Makefile — override if using a different one:
