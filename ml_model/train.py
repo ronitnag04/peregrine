@@ -114,6 +114,10 @@ def main() -> None:
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
     loss_fn = nn.L1Loss()
 
+    early_stop_patience = 10
+    best_eval_loss = float("inf")
+    epochs_without_improvement = 0
+
     print('----------- Start Training --------------')
     epochs_data: list[dict[str, float]] = []
     total_start = time.perf_counter()
@@ -136,6 +140,16 @@ def main() -> None:
             f"Eval Loss: {eval_loss:.4f} | "
             f"Percent Error: {percent_error:.2f}%"
         )
+
+        if eval_loss < best_eval_loss:
+            best_eval_loss = eval_loss
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= early_stop_patience:
+                print(f"Early stopping: no improvement for {early_stop_patience} epochs.")
+                break
+
     print('------------ End Training ---------------')
     total_duration = time.perf_counter() - total_start
 
