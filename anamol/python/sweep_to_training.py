@@ -34,7 +34,7 @@ import os
 import re
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +51,25 @@ from gen_training_data import (
     get_config_scalar_features,
     generate_training_matrix,
 )
+
+# ── Worker process globals (populated by initializer for ProcessPoolExecutor) ──
+
+_worker_globals: dict = {}
+
+
+def _worker_init(
+    lookup_tables, stall_arrays_cache, rob_arrays_cache,
+    bp_json_cache, traces_dir, bm_output_dirs, window_size, log_level,
+):
+    _worker_globals["lookup_tables"] = lookup_tables
+    _worker_globals["stall_arrays_cache"] = stall_arrays_cache
+    _worker_globals["rob_arrays_cache"] = rob_arrays_cache
+    _worker_globals["bp_json_cache"] = bp_json_cache
+    _worker_globals["traces_dir"] = traces_dir
+    _worker_globals["bm_output_dirs"] = bm_output_dirs
+    _worker_globals["window_size"] = window_size
+    _worker_globals["log_level"] = log_level
+
 
 # ── gem5 → anamol Config parameter name mapping (auto-derived from registry) ──
 
@@ -330,6 +349,7 @@ def process_sweep_csv(
     anamol_bin: str = "./anamol",
     precomputed_dir: Optional[str] = None,
     workers: Optional[int] = None,
+    log_level: int = 2,
 ) -> pd.DataFrame:
     """
     Main pipeline: read sweep CSV → generate training data for each row.
@@ -358,13 +378,16 @@ def process_sweep_csv(
     output_path = Path(output_path)
 
     # ── Load and filter sweep CSV ─────────────────────────────────────────────
-    print(f"Loading sweep CSV: {sweep_csv}")
+    if log_level >= 1:
+        print(f"Loading sweep CSV: {sweep_csv}")
     df = pd.read_csv(sweep_csv)
-    print(f"  Total rows: {len(df)}")
+    if log_level >= 1:
+        print(f"  Total rows: {len(df)}")
 
     if benchmarks:
         df = df[df["benchmark"].isin(benchmarks)].reset_index(drop=True)
-        print(f"  After benchmark filter ({benchmarks}): {len(df)} rows")
+        if log_level >= 1:
+            print(f"  After benchmark filter ({benchmarks}): {len(df)} rows")
 
     if df.empty:
         print("No rows to process after filtering.")
@@ -389,7 +412,7 @@ def process_sweep_csv(
     if do_sweep or precomputed_dir is not None:
         result = _process_with_sweep(
             df, traces_dir, window_size, output_dir,
-            anamol_bin, precomputed_dir=precomputed_dir, workers=workers,
+            anamol_bin, precomputed_dir=precomputed_dir, workers=workers, log_level=log_level,
         )
         if not result.empty:
             _save_output(result, Path(output_path), output_format)
@@ -405,7 +428,10 @@ def process_sweep_csv(
         cpi = float(row["cpi"])
         trace_dir = traces_dir / f"{benchmark}-pin"
 
-        print(f"\n[{row_idx + 1}/{n_total}] benchmark={benchmark}, cpi={cpi:.4f}")
+        if log_level >= 2:
+            print(f"\n[{row_idx + 1}/{n_total}] benchmark={benchmark}, cpi={cpi:.4f}")
+        elif log_level >= 1:
+            print(f"[{row_idx + 1}/{n_total}] {benchmark} cpi={cpi:.4f}")
 
         # Parse config from gem5 row
         try:
@@ -426,14 +452,16 @@ def process_sweep_csv(
         # Run anamol if not already cached
         needs_run = not (row_output_dir / "thr_rob.npy").exists()
         if needs_run:
-            print(f"  Running anamol (single-config) → {row_output_dir}")
+            if log_level >= 2:
+                print(f"  Running anamol (single-config) → {row_output_dir}")
             try:
                 _run_anamol(anamol_bin, trace_dir, row_output_dir, window_size, config)
             except RuntimeError as e:
                 print(f"  WARNING: anamol failed: {e} — skipping row")
                 continue
         else:
-            print(f"  Using cached output: {row_output_dir}")
+            if log_level >= 2:
+                print(f"  Using cached output: {row_output_dir}")
 
         # Compute throughput features directly from .npy files
         try:
@@ -486,18 +514,24 @@ def _process_single_row(
     row_idx: int,
     row: pd.Series,
     n_total: int,
-    traces_dir: Path,
-    lookup_tables: dict,
-    bm_output_dirs: dict,
-    window_size: int,
 ) -> Optional[pd.DataFrame]:
     """Process one sweep CSV row → training DataFrame row (or None on failure)."""
+    lookup_tables      = _worker_globals["lookup_tables"]
+    stall_arrays_cache = _worker_globals["stall_arrays_cache"]
+    rob_arrays_cache   = _worker_globals["rob_arrays_cache"]
+    bp_json_cache      = _worker_globals["bp_json_cache"]
+    traces_dir         = _worker_globals["traces_dir"]
+    bm_output_dirs     = _worker_globals["bm_output_dirs"]
+    log_level          = _worker_globals["log_level"]
+
     benchmark = row["benchmark"]
     cpi = float(row["cpi"])
-    trace_dir = traces_dir / f"{benchmark}-pin"
     bm_output_dir = bm_output_dirs.get(benchmark)
 
-    print(f"\n[{row_idx + 1}/{n_total}] benchmark={benchmark}, cpi={cpi:.4f}")
+    if log_level >= 2:
+        print(f"\n[{row_idx + 1}/{n_total}] benchmark={benchmark}, cpi={cpi:.4f}")
+    elif log_level >= 1:
+        print(f"[{row_idx + 1}/{n_total}] {benchmark} cpi={cpi:.4f}")
 
     if benchmark not in lookup_tables or bm_output_dir is None:
         print(f"  WARNING: No lookup table for '{benchmark}' — skipping row")
@@ -509,25 +543,27 @@ def _process_single_row(
         print(f"  WARNING: Failed to parse config: {e} — skipping row")
         return None
 
-    bp_rate = _load_bp_rate(trace_dir, config.branch_predictor)
+    bp_name = "local" if config.branch_predictor == 0 else "tage"
+    bp_rate = bp_json_cache.get(benchmark, {}).get(bp_name)
     if bp_rate is not None:
         config.misprediction_percent = bp_rate
 
+    lt = lookup_tables[benchmark]
+
     try:
-        row_df = generate_training_matrix(
-            [config],
-            lookup_tables[benchmark],
-            str(trace_dir / "trace.csv"),
-            window_size,
-            include_latency_features=True,
-            output_dir=str(bm_output_dir),
-        )
+        thr_arr  = lt.get_config_features(config, as_dataframe=False)
+        stall_arr = stall_arrays_cache[benchmark]
+
+        config_idx = lt._cache_config_idx(config) if lt._cache_config_to_idx else None
+        rob_arr = rob_arrays_cache[(benchmark, config_idx)]
+
+        cfg_arr = np.fromiter(get_config_scalar_features(config).values(), dtype=float)
+        row_arr = np.concatenate([thr_arr, stall_arr, rob_arr, cfg_arr, [cpi]])
     except Exception as e:
-        print(f"  WARNING: generate_training_matrix failed: {e} — skipping row")
+        print(f"  WARNING: feature extraction failed: {e} — skipping row")
         return None
 
-    row_df["cpi"] = cpi
-    return row_df
+    return row_arr
 
 
 def _process_with_sweep(
@@ -538,6 +574,7 @@ def _process_with_sweep(
     anamol_bin: str,
     precomputed_dir: Optional[str] = None,
     workers: Optional[int] = None,
+    log_level: int = 2,
 ) -> pd.DataFrame:
     """
     Sweep mode: use a lookup table (built from full sweep outputs) for each benchmark.
@@ -566,7 +603,8 @@ def _process_with_sweep(
                     f"— skipping {benchmark}"
                 )
                 continue
-            print(f"\nUsing precomputed output for {benchmark}: {bm_output_dir}")
+            if log_level >= 2:
+                print(f"\nUsing precomputed output for {benchmark}: {bm_output_dir}")
         else:
             bm_output_dir = output_dir / benchmark / "sweep"
 
@@ -574,15 +612,18 @@ def _process_with_sweep(
         lookup_path = bm_output_dir / "throughput_lookup.pkl"
 
         if lookup_path.exists():
-            print(f"  Loading cached lookup table: {lookup_path}")
+            if log_level >= 2:
+                print(f"  Loading cached lookup table: {lookup_path}")
             lookup_tables[benchmark] = ThroughputLookupTable.load(str(lookup_path))
         else:
             if precomputed_dir is None:
-                print(f"  Running full sweep for {benchmark} → {bm_output_dir}")
+                if log_level >= 2:
+                    print(f"  Running full sweep for {benchmark} → {bm_output_dir}")
                 _run_anamol(anamol_bin, trace_dir, bm_output_dir, window_size, config=None)
 
             configs_json = trace_dir / "trace_configs.json"
-            print(f"  Building lookup table for {benchmark}...")
+            if log_level >= 2:
+                print(f"  Building lookup table for {benchmark}...")
             lt = ThroughputLookupTable(
                 str(bm_output_dir),
                 configs_json=str(configs_json) if configs_json.exists() else None,
@@ -590,32 +631,81 @@ def _process_with_sweep(
             lt.save(str(lookup_path))
             lookup_tables[benchmark] = lt
 
+    # Precompute stall features per benchmark once (expensive: reads full trace CSV)
+    stall_features_cache: dict = {}
+    for bm in bm_output_dirs:
+        trace_file = str(traces_dir / f"{bm}-pin" / "trace.csv")
+        stall_features_cache[bm] = compute_pipeline_stall_features(trace_file, window_size)
+
+    # Precompute ROB latency features per (benchmark, cache_config_idx)
+    # There are few unique cache configs vs. many rows — avoids redundant .npy reads.
+    rob_features_cache: dict = {}  # (bm, config_idx) → pd.DataFrame
+    for bm, lt in lookup_tables.items():
+        bm_output_dir = bm_output_dirs[bm]
+        if lt._cache_config_to_idx:
+            for cfg_idx in set(lt._cache_config_to_idx.values()):
+                rob_features_cache[(bm, cfg_idx)] = compute_rob_latency_features(
+                    str(bm_output_dir), config_idx=cfg_idx
+                )
+        else:
+            rob_features_cache[(bm, None)] = compute_rob_latency_features(str(bm_output_dir))
+
+    # Convert DataFrame caches to numpy arrays for workers (cheaper to pickle + concat)
+    stall_arrays_cache = {bm: df.to_numpy().ravel() for bm, df in stall_features_cache.items()}
+    rob_arrays_cache   = {k:  df.to_numpy().ravel() for k,  df in rob_features_cache.items()}
+
+    # Precompute bp json per benchmark (workers do a dict lookup instead of file I/O)
+    bp_json_cache: dict = {}
+    for bm in bm_output_dirs:
+        bp_json = traces_dir / f"{bm}-pin" / "trace_bp.json"
+        if bp_json.exists():
+            with open(bp_json) as f:
+                bp_json_cache[bm] = json.load(f)
+
+    # Precompute column names once; workers return numpy arrays, main process builds DataFrame
+    sample_bm = next(iter(stall_features_cache))
+    sample_rob_key = next(iter(rob_features_cache))
+    sample_lt = next(iter(lookup_tables.values()))
+    column_names = (
+        sample_lt._get_column_names()
+        + list(stall_features_cache[sample_bm].columns)
+        + list(rob_features_cache[sample_rob_key].columns)
+        + list(get_config_scalar_features(models.Config()).keys())
+        + ["cpi"]
+    )
+
     # Process rows in parallel using lookup tables
     n_total = len(df)
     max_workers = workers or os.cpu_count() or 1
-    print(f"\nProcessing {n_total} rows with {max_workers} workers...")
+    if log_level >= 1:
+        print(f"\nProcessing {n_total} rows with {max_workers} workers...")
 
-    futures_map = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for i, (_, row) in enumerate(df.iterrows()):
-            fut = executor.submit(
-                _process_single_row,
-                i, row, n_total,
-                traces_dir, lookup_tables, bm_output_dirs, window_size,
-            )
-            futures_map[fut] = i
+    executor = ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_worker_init,
+        initargs=(
+            lookup_tables, stall_arrays_cache, rob_arrays_cache,
+            bp_json_cache, traces_dir, bm_output_dirs, window_size, log_level,
+        ),
+    )
+    futures_map = {
+        executor.submit(_process_single_row, i, row, n_total): i
+        for i, (_, row) in enumerate(df.iterrows())
+    }
 
-        all_rows = []
-        for fut in as_completed(futures_map):
-            result = fut.result()
-            if result is not None:
-                all_rows.append(result)
+    all_arrays = []
+    for fut in as_completed(futures_map):
+        result = fut.result()
+        if result is not None:
+            all_arrays.append(result)
 
-    if not all_rows:
+    executor.shutdown(wait=False)
+
+    if not all_arrays:
         print("No training rows generated.")
         return pd.DataFrame()
 
-    return pd.concat(all_rows, ignore_index=True)
+    return pd.DataFrame(np.stack(all_arrays), columns=column_names)
 
 
 def _save_output(df: pd.DataFrame, output_path: Path, fmt: str) -> None:
@@ -704,6 +794,16 @@ def main():
         metavar="N",
         help="Number of parallel worker threads (default: os.cpu_count())",
     )
+    parser.add_argument(
+        "--log-level",
+        "-q",
+        choices=["quiet", "normal", "verbose"],
+        default="verbose",
+        help=(
+            "Output verbosity: quiet=warnings only, normal=1 line per row, "
+            "verbose=full detail (default: verbose)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -748,6 +848,7 @@ def main():
         anamol_bin=anamol_bin,
         precomputed_dir=args.precomputed_dir,
         workers=args.workers,
+        log_level={"quiet": 0, "normal": 1, "verbose": 2}[args.log_level],
     )
 
     if result.empty:

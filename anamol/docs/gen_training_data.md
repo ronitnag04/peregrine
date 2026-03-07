@@ -103,3 +103,4 @@ make sweep_training.run SWEEP_CSV=sim_sweeps/my_sweep/sweep_results.csv ...
 | `SWEEP_OUT` | `training/sweep_training.<format>` | Output file path |
 | `SWEEP_CACHE_DIR` | `.cache/sweep_out` | Intermediate output directory |
 | `SWEEP_WORKERS` | _(cpu count)_ | Parallel worker threads |
+| `SWEEP_LOG_LEVEL` | `verbose` | Output verbosity: `quiet`, `normal` (1 line/row), `verbose` |

@@ -230,6 +230,8 @@ SWEEP_OUT              ?= $(TRAINING_DIR)/sweep_training.$(SWEEP_FORMAT)
 SWEEP_PRECOMPUTED_DIR  ?=
 # Number of parallel worker threads for sweep_training.run (default: os.cpu_count())
 SWEEP_WORKERS          ?=
+# Output verbosity: quiet=warnings only, normal=1 line per row, verbose=full detail
+SWEEP_LOG_LEVEL        ?= verbose
 # Directory containing benchmark folders with trace CSV files (default: traces/)
 SWEEP_TRACES_DIR       ?= traces
 # Intermediate output directory for sweep_training.run (default: .cache/sweep_out)
@@ -247,7 +249,8 @@ sweep_training.run:
 		$(if $(BENCHMARKS),--benchmarks $(BENCHMARKS),) \
 		$(if $(filter 1,$(SWEEP_DO_SWEEP)),--do-sweep,) \
 		$(if $(SWEEP_PRECOMPUTED_DIR),--precomputed-dir $(SWEEP_PRECOMPUTED_DIR),) \
-		$(if $(SWEEP_WORKERS),--workers $(SWEEP_WORKERS),)
+		$(if $(SWEEP_WORKERS),--workers $(SWEEP_WORKERS),) \
+		$(if $(filter-out verbose,$(SWEEP_LOG_LEVEL)),--log-level $(SWEEP_LOG_LEVEL),)
 
 # Convenience run target for anamol
 anamol.run: main.run visualize.run
