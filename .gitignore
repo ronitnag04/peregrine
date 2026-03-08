@@ -19,3 +19,6 @@ wheels/
 .DS_Store
 
 anamol/output
+*.pkl
+*.npy
+anamol/traces

@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Local imports
+import registry
 import utils
 import models
 from build_throughput_lookup import ThroughputLookupTable
@@ -97,48 +98,20 @@ def sample_random_config() -> models.Config:
     """
     Sample a random microarchitecture configuration following Concorde's approach.
 
-    Independently samples each parameter from its valid range (as documented in Config).
+    Independently samples each enabled parameter from its range in registry.yaml.
     This creates a massive microarchitecture space (~2x10^23 as noted in Concorde paper).
 
     Returns:
         Random Config with all parameters independently sampled
-
-    Example:
-        >>> from gen_training_data import sample_random_config
-        >>> config = sample_random_config()
-        >>> print(config.rob_size, config.commit_width)  # e.g., 512 8
     """
-    # Parameter ranges from models.Config comments
-    param_ranges = {
-        "rob_size": (1, 1024),
-        "commit_width": (1, 12),
-        "load_queue_size": (1, 256),
-        "store_queue_size": (1, 256),
-        "alu_issue_width": (1, 8),
-        "alu_mul_issue_width": (1, 8),
-        "alu_div_issue_width": (1, 8),
-        "fp_issue_width": (1, 8),
-        "ls_issue_width": (1, 8),
-        "num_ls_pipes": (1, 8),
-        "num_load_pipes": (0, 8),
-        "fetch_width": (1, 12),
-        "decode_width": (1, 12),
-        "rename_width": (1, 12),
-        "num_fetch_buffers": (1, 8),
-        "max_icache_fills": (1, 32),
-        "branch_predictor": (0, 1),  # Binary: 0=simple, 1=tage
-        "misprediction_percent": (0, 100),
-        "l1d_cache_kb": (16, 256),
-        "l1i_cache_kb": (16, 256),
-        "l2_cache_kb": (512, 4096),
-        "l1d_stride_prefetch": (0, 1),  # Binary: 0=off, 1=on
-    }
-
-    # Sample each parameter independently
     config_dict = {}
-    for param_name, (min_val, max_val) in param_ranges.items():
-        config_dict[param_name] = np.random.randint(min_val, max_val + 1)
-
+    for p in registry.ENABLED_PARAMS:
+        if p.param_type == "float":
+            config_dict[p.name] = float(np.random.uniform(p.min_val, p.max_val))
+        elif isinstance(p.step, list):
+            config_dict[p.name] = int(np.random.choice(p.step))
+        else:
+            config_dict[p.name] = int(np.random.randint(p.min_val, p.max_val + 1))
     return models.Config(**config_dict)
 
 
@@ -146,41 +119,21 @@ def get_config_scalar_features(config: models.Config) -> Dict[str, Any]:
     """
     Extract scalar and one-hot encoded features from a Config object.
 
-    Returns dictionary with 23 columns:
-    - 19 scalar microarchitecture parameters
-    - 2 one-hot encoded branch predictor columns
-    - 2 one-hot encoded prefetcher columns
+    Returns dictionary with 25 columns:
+    - 21 scalar microarchitecture parameters
+    - 2 one-hot encoded branch predictor columns (bp_is_simple, bp_is_tage)
+    - 2 one-hot encoded prefetcher columns (prefetcher_off, prefetcher_on)
     """
+    # Scalar columns: one per enabled param, name matches Config field name.
     features = {
-        # Scalar parameters (19 columns)
-        "rob_size": config.rob_size,
-        "commit_width": config.commit_width,
-        "load_queue_size": config.load_queue_size,
-        "store_queue_size": config.store_queue_size,
-        "alu_issue_width": config.alu_issue_width,
-        "alu_mul_issue_width": config.alu_mul_issue_width,
-        "alu_div_issue_width": config.alu_div_issue_width,
-        "fp_issue_width": config.fp_issue_width,
-        "load_store_issue_width": config.ls_issue_width,
-        "num_load_store_pipes": config.num_ls_pipes,
-        "num_load_pipes": config.num_load_pipes,
-        "fetch_width": config.fetch_width,
-        "decode_width": config.decode_width,
-        "rename_width": config.rename_width,
-        "num_fetch_buffers": config.num_fetch_buffers,
-        "max_icache_fills": config.max_icache_fills,
-        "percent_mispred_simple_bp": config.misprediction_percent,
-        "l1d_cache_size_kb": config.l1d_cache_kb,
-        "l1i_cache_size_kb": config.l1i_cache_kb,
-        "l2_cache_size_kb": config.l2_cache_kb,
-        "l1d_stride_prefetcher_degree": config.l1d_stride_prefetch,
-        # Branch predictor one-hot (2 columns)
-        "bp_is_simple": 1 if config.branch_predictor == 0 else 0,
-        "bp_is_tage": 1 if config.branch_predictor == 1 else 0,
-        # Prefetcher one-hot (2 columns)
-        "prefetcher_off": 1 if config.l1d_stride_prefetch == 0 else 0,
-        "prefetcher_on": 1 if config.l1d_stride_prefetch == 1 else 0,
+        p.name: getattr(config, p.name)
+        for p in registry.ENABLED_PARAMS
     }
+    # One-hot encodings for categorical params
+    features["bp_is_simple"] = 1 if config.branch_predictor == 0 else 0
+    features["bp_is_tage"] = 1 if config.branch_predictor == 1 else 0
+    features["prefetcher_off"] = 1 if config.l1d_stride_prefetch == 0 else 0
+    features["prefetcher_on"] = 1 if config.l1d_stride_prefetch != 0 else 0
     return features
 
 
@@ -196,15 +149,17 @@ def _add_cdf_features_to_dict(
         latencies, num_points=num_points
     )
 
-    percentiles = np.linspace(1, 99, num_points)
-    for j, p in enumerate(percentiles):
+    for j, p in enumerate(utils.PERCENTILE_POINTS[:num_points]):
         feature_dict[f"{prefix}_raw_p{int(p)}"] = cdf_raw[j]
-    for j, p in enumerate(percentiles):
+    for j, p in enumerate(utils.PERCENTILE_POINTS[:num_points]):
         feature_dict[f"{prefix}_weighted_p{int(p)}"] = cdf_weighted[j]
     feature_dict[f"{prefix}_mean"] = mean_val
 
 
-def compute_rob_latency_features(output_dir: str = "output") -> pd.DataFrame:
+def compute_rob_latency_features(
+    output_dir: str = "output",
+    config_idx: int | None = None,
+) -> pd.DataFrame:
     """
     Compute ROB latency features from pre-computed .npy files.
 
@@ -218,35 +173,48 @@ def compute_rob_latency_features(output_dir: str = "output") -> pd.DataFrame:
     Total: 11 + 1111 + 1111 + 101 = 2334 features
 
     Args:
-        output_dir: Directory containing the latency .npy files
+        output_dir: Top-level simulator output directory (e.g. "output/foo").
+        config_idx: Cache config index (0-based).  When provided, files are
+            loaded from output_dir/config_<config_idx:04d>/ (Mode B).
+            When None, files are loaded directly from output_dir (Mode A).
 
     Returns:
         DataFrame with 1 row and 2334 columns
 
     Example:
         >>> from gen_training_data import compute_rob_latency_features
-        >>> latency_features = compute_rob_latency_features("output")
+        >>> # Mode A
+        >>> latency_features = compute_rob_latency_features("output/foo")
+        >>> # Mode B — specific cache config
+        >>> latency_features = compute_rob_latency_features("output/foo", config_idx=3)
         >>> print(latency_features.shape)  # (1, 2334)
     """
     from pathlib import Path
 
     output_path = Path(output_dir)
 
-    # Load overall throughput: shape (11, 2) [rob_size, throughput]
-    thr_path = output_path / "rob_latency_overall_thr.npy"
-    if not thr_path.exists():
-        raise FileNotFoundError(f"Latency file not found: {thr_path}")
+    if config_idx is not None:
+        load_path = output_path / f"config_{config_idx:04d}"
+        print(f"\nComputing ROB latency features from: {load_path}")
+    else:
+        load_path = output_path
+        print(f"\nComputing ROB latency features from: {output_dir}")
 
-    overall_thr = np.load(thr_path)  # shape (11, 2)
+    thr_path = load_path / "rob_latency_overall_thr.npy"
+    if not thr_path.exists():
+        raise FileNotFoundError(
+            f"Latency file not found: {thr_path}\n"
+            "For Mode B runs pass config_idx= to select the cache config directory."
+        )
+
+    overall_thr = np.load(thr_path)
+    issue_latencies = np.load(load_path / "rob_latency_issue.npy")
+    commit_latencies = np.load(load_path / "rob_latency_commit.npy")
+    exec_latencies = np.load(load_path / "rob_latency_exec.npy")
+
     rob_sizes = overall_thr[:, 0].astype(int)
     throughputs = overall_thr[:, 1]
 
-    # Load latency distributions: shape (11, k) where k = num_instructions
-    issue_latencies = np.load(output_path / "rob_latency_issue.npy")
-    commit_latencies = np.load(output_path / "rob_latency_commit.npy")
-    exec_latencies = np.load(output_path / "rob_latency_exec.npy")
-
-    print(f"\nComputing ROB latency features from: {output_dir}")
     print(f"  ROB sizes: {rob_sizes.tolist()}")
     print(f"  Number of instructions: {issue_latencies.shape[1]:,}")
 
@@ -340,25 +308,14 @@ def build_training_data(
     print(f"Loading lookup table from: {lookup_path}")
     lookup_table = ThroughputLookupTable.load(lookup_path)
 
-    # Generate training data
-    if len(configs) == 1:
-        training_data = generate_training_sample(
-            configs[0],
-            lookup_table,
-            trace_path,
-            window_size,
-            include_latency_features,
-            output_dir,
-        )
-    else:
-        training_data = generate_training_matrix(
-            configs,
-            lookup_table,
-            trace_path,
-            window_size,
-            include_latency_features,
-            output_dir,
-        )
+    training_data = generate_training_matrix(
+        configs,
+        lookup_table,
+        trace_path,
+        window_size,
+        include_latency_features,
+        output_dir,
+    )
 
     # Save if requested
     if output_path:
@@ -413,37 +370,25 @@ def compute_pipeline_stall_features(trace_file: str, window_size: int) -> pd.Dat
     print(f"  Total instructions: {num_instructions:,}")
     print(f"  Number of windows: {num_windows:,}")
 
-    # Create boolean masks for each stall type
-    is_isb = df["Instruction Sync"] == True
-    is_direct_cond = df["Branch Type"] == "direct_conditional"
-    is_direct_uncond = df["Branch Type"] == "direct_unconditional"
-    is_indirect = df["Branch Type"] == "indirect"
-
-    # Count occurrences per window for each stall type
-    stall_counts = {
-        "ISB": np.zeros(num_windows),
-        "DIRECT_COND": np.zeros(num_windows),
-        "DIRECT_UNCOND": np.zeros(num_windows),
-        "INDIRECT": np.zeros(num_windows),
+    # Boolean masks for each stall type
+    raw_masks = {
+        "ISB": (df["Instruction Sync"] == True).to_numpy(),
+        "DIRECT_COND": (df["Branch Type"] == "direct_conditional").to_numpy(),
+        "DIRECT_UNCOND": (df["Branch Type"] == "direct_unconditional").to_numpy(),
+        "INDIRECT": (df["Branch Type"] == "indirect").to_numpy(),
     }
 
-    for window_idx in range(num_windows):
-        start_idx = window_idx * window_size
-        end_idx = min(start_idx + window_size, num_instructions)
-
-        # Count each stall type in this window
-        stall_counts["ISB"][window_idx] = is_isb[start_idx:end_idx].sum()
-        stall_counts["DIRECT_COND"][window_idx] = is_direct_cond[
-            start_idx:end_idx
-        ].sum()
-        stall_counts["DIRECT_UNCOND"][window_idx] = is_direct_uncond[
-            start_idx:end_idx
-        ].sum()
-        stall_counts["INDIRECT"][window_idx] = is_indirect[start_idx:end_idx].sum()
+    # Count occurrences per window via reshape+sum (vectorized, no Python loop).
+    n_full = (num_instructions // window_size) * window_size
+    stall_counts = {}
+    for name, mask in raw_masks.items():
+        counts = mask[:n_full].reshape(-1, window_size).sum(axis=1).astype(float)
+        if n_full < num_instructions:  # partial last window
+            counts = np.append(counts, float(mask[n_full:].sum()))
+        stall_counts[name] = counts
 
     # Compute features for each stall type
     feature_dict = {}
-    percentiles = np.linspace(1, 99, 50)
 
     for stall_name, counts in stall_counts.items():
         total_count = int(counts.sum())
@@ -465,9 +410,9 @@ def compute_pipeline_stall_features(trace_file: str, window_size: int) -> pd.Dat
             )
 
         # Add to feature dictionary with proper column names
-        for i, p in enumerate(percentiles):
+        for i, p in enumerate(utils.PERCENTILE_POINTS):
             feature_dict[f"{stall_name}_raw_p{int(p)}"] = cdf_raw[i]
-        for i, p in enumerate(percentiles):
+        for i, p in enumerate(utils.PERCENTILE_POINTS):
             feature_dict[f"{stall_name}_weighted_p{int(p)}"] = cdf_weighted[i]
         feature_dict[f"{stall_name}_mean"] = mean_val
 
@@ -502,7 +447,7 @@ def generate_training_sample(
         - Throughput features (N resources x 101 each)
         - Pipeline stall features (4 stall types x 101 each)
         - ROB latency features (2334 features, if include_latency_features=True)
-        - Config scalar features including misprediction_percent (23 features)
+        - Config scalar features including misprediction_percent (25 features)
 
     Example:
         >>> import models
@@ -516,27 +461,10 @@ def generate_training_sample(
         ... )
         >>> print(sample.shape)  # (1, N_features)
     """
-    # Get throughput features from lookup table
-    throughput_features = lookup_table.get_config_features(config, as_dataframe=True)
-
-    # Get pipeline stall features from trace
-    stall_features = compute_pipeline_stall_features(trace_file, window_size)
-
-    # Combine all features into single row
-    combined_features = pd.concat([throughput_features, stall_features], axis=1)
-
-    # Add ROB latency features if requested
-    if include_latency_features:
-        latency_features = compute_rob_latency_features(output_dir)
-        combined_features = pd.concat([combined_features, latency_features], axis=1)
-
-    # Add config scalar features (19 scalars + 2 BP one-hot + 2 prefetcher one-hot = 23 cols)
-    # Note: misprediction_percent is included in these features
-    config_scalar_features = get_config_scalar_features(config)
-    for key, value in config_scalar_features.items():
-        combined_features[key] = value
-
-    return combined_features
+    return generate_training_matrix(
+        [config], lookup_table, trace_file, window_size,
+        include_latency_features, output_dir,
+    )
 
 
 def generate_training_matrix(
@@ -599,13 +527,27 @@ def generate_training_matrix(
     # Combine throughput and stall features
     training_data = pd.concat([throughput_df, stall_df], axis=1)
 
-    # Add ROB latency features if requested (same for all configs)
+    # Add ROB latency features if requested.
+    # Mode B: each config has a cache config index → load from the matching
+    #         config_NNNN/ subdirectory, with a per-index cache to avoid redundant I/O.
+    # Mode A: load once from output_dir directly.
     if include_latency_features:
-        latency_features = compute_rob_latency_features(output_dir)
-        latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
+        mode_b = bool(lookup_table._cache_config_to_idx)
+        if mode_b:
+            _rob_cache: dict[int, pd.DataFrame] = {}
+            latency_rows = []
+            for config in configs:
+                idx = lookup_table._cache_config_idx(config)
+                if idx not in _rob_cache:
+                    _rob_cache[idx] = compute_rob_latency_features(output_dir, config_idx=idx)
+                latency_rows.append(_rob_cache[idx])
+            latency_df = pd.concat(latency_rows, ignore_index=True)
+        else:
+            latency_features = compute_rob_latency_features(output_dir)
+            latency_df = pd.concat([latency_features] * len(configs), ignore_index=True)
         training_data = pd.concat([training_data, latency_df], axis=1)
 
-    # Add config scalar features for each configuration (23 columns per config)
+    # Add config scalar features for each configuration (25 columns per config)
     # Note: misprediction_percent is included in these features and can vary per config
     config_features_list = []
     for config in configs:
@@ -657,6 +599,16 @@ def main():
         type=int,
         default=400,
         help="Window size for pipeline stall analysis (must match C++ model, default: 400)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory containing simulator output (rob_latency_*.npy files). "
+            "Defaults to the directory of the lookup table. "
+            "For per-cache-config runs, pass a config_NNNN/ subdirectory."
+        ),
     )
 
     # Configuration specification (mutually exclusive)
@@ -729,22 +681,19 @@ def main():
     print(f"Window size: {args.window_size}")
     print()
 
-    if len(configs) == 1:
-        # Single sample
-        training_data = generate_training_sample(
-            configs[0],
-            lookup_table,
-            args.trace,
-            args.window_size,
-        )
+    # Derive output_dir: explicit flag > directory of lookup table
+    if args.output_dir is not None:
+        output_dir = args.output_dir
     else:
-        # Multiple samples
-        training_data = generate_training_matrix(
-            configs,
-            lookup_table,
-            args.trace,
-            args.window_size,
-        )
+        output_dir = str(Path(args.lookup).parent)
+
+    training_data = generate_training_matrix(
+        configs,
+        lookup_table,
+        args.trace,
+        args.window_size,
+        output_dir=output_dir,
+    )
 
     # Save to file (format based on extension)
     output_path = Path(args.output).resolve()

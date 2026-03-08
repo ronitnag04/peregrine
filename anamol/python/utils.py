@@ -2,6 +2,12 @@ import os
 import models
 import numpy as np
 
+# Percentile levels used for all CDF feature vectors (avoid 0/100 extremes).
+PERCENTILE_POINTS = np.linspace(1, 99, 50)
+
+# Dimension of each per-resource feature vector: raw CDF + weighted CDF + mean.
+FEATURES_PER_RESOURCE = 2 * len(PERCENTILE_POINTS) + 1  # = 101
+
 
 def load_resource_file(path, res_name):
     """
@@ -78,32 +84,25 @@ def empirical_cdf_percentiles(samples: np.ndarray, num_points: int = 50) -> np.n
     if samples.size == 0:
         raise ValueError("Cannot compute CDF on empty sample set")
 
-    # avoid extreme instability at 0% or 100%
-    ps = np.linspace(1, 99, num_points)
-    return np.percentile(samples, ps)
+    return np.percentile(samples, PERCENTILE_POINTS[:num_points])
 
 
 def compute_cdf_features(samples: np.ndarray, num_points: int = 50):
     samples = np.asarray(samples).reshape(-1)
     cdf_raw = empirical_cdf_percentiles(samples, num_points=num_points)
 
-    # size-weight the distribution: weight = max(sample, 0)
+    # Size-weighted CDF: weight each sample by its throughput value (max 0).
+    # Computed exactly via sorted cumulative weights + interpolation.
     w = np.clip(samples, 0, None)
 
     if w.sum() == 0:
-        # all samples <= 0 → fallback to raw distribution
+        # All samples <= 0 — fall back to the raw distribution.
         cdf_weighted = cdf_raw.copy()
     else:
         w = w / w.sum()
-        target_count = 10_000
+        sorted_idx = np.argsort(samples)
+        cum_weights = np.cumsum(w[sorted_idx])
+        ps = PERCENTILE_POINTS[:num_points] / 100
+        cdf_weighted = np.interp(ps, cum_weights, samples[sorted_idx])
 
-        counts = np.round(w * target_count).astype(int)
-
-        # Do NOT force zero-weights to become 1
-        mask = counts > 0
-        expanded = np.repeat(samples[mask], counts[mask])
-
-        cdf_weighted = empirical_cdf_percentiles(expanded, num_points=num_points)
-
-    mean_val = float(np.mean(samples))
-    return cdf_raw, cdf_weighted, mean_val
+    return cdf_raw, cdf_weighted, float(np.mean(samples))

@@ -49,52 +49,120 @@ class Instruction:
         return self.read_addrs != []
     
     def estimate_latency(self, icache: Cache, dcache: Cache):
-        # first add instruction fetch latency based on icache simulation
+        # Fetch latency: I-cache access (matches gem5 instruction fetch path).
         fetch_latency = icache.read(self.inst_ptr)
+
+        # Execution latency aligned with gem5 O3 + FUPool (see gem5_fu_latencies.py):
+        # - Load-only: cache response + op latency (e.g. FloatSqrt with mem = cache + 24).
+        # - Store-only: 1 cycle (MemWrite) + op latency if the inst also does work (e.g. FSTP).
+        # - Load+store (e.g. atomic): cache read + op latency (store completion overlapped).
+        # - Non-memory: opClass latency only.
         exec_latency = 0
-        
-        
-        # next add op latency (does not include memory latency)
-        if len(self.read_addrs) > 0:
-            exec_latency += self.opcode.mem_reg_latency()
-        elif len(self.write_addrs) > 0:
-            exec_latency += self.opcode.reg_mem_latency()
+        num_read_addrs = len(self.read_addrs)
+        num_write_addrs = len(self.write_addrs)
+
+        # Select opcode variant based on actual memory behavior (reads/writes)
+        variants = self.opcode.value  # dict: variant -> [OpClass names]
+
+        # Helper: classify each variant by whether it reads and/or writes memory.
+        read_classes = {
+            "MemRead", "FloatMemRead",
+            "SimdUnitStrideLoad", "SimdUnitStrideMaskLoad",
+            "SimdUnitStrideSegmentedLoad", "SimdStridedLoad",
+            "SimdIndexedLoad", "SimdUnitStrideFaultOnlyFirstLoad",
+            "SimdUnitStrideSegmentedFaultOnlyFirstLoad",
+            "SimdWholeRegisterLoad", "SimdStrideSegmentedLoad",
+        }
+        write_classes = {
+            "MemWrite", "FloatMemWrite",
+            "SimdUnitStrideStore", "SimdUnitStrideMaskStore",
+            "SimdUnitStrideSegmentedStore", "SimdStridedStore",
+            "SimdIndexedStore", "SimdWholeRegisterStore",
+            "SimdStrideSegmentedStore",
+        }
+
+        def variant_mem_flags(op_classes):
+            has_read = any(cls in read_classes for cls in op_classes)
+            has_write = any(cls in write_classes for cls in op_classes)
+            return has_read, has_write
+
+        want_read = num_read_addrs > 0
+        want_write = num_write_addrs > 0
+
+        # Find variants whose microop OpClasses match the observed mem behavior.
+        matching = []
+        for name, op_classes in variants.items():
+            has_read, has_write = variant_mem_flags(op_classes)
+            if has_read == want_read and has_write == want_write:
+                matching.append(name)
+
+        if not matching:
+            # Fallback: if no exact match, prefer variants that at least
+            # have the right kind of memory access.
+            for name, op_classes in variants.items():
+                has_read, has_write = variant_mem_flags(op_classes)
+                if want_read and has_read:
+                    matching.append(name)
+                elif want_write and has_write:
+                    matching.append(name)
+
+        if not matching:
+            # Last-resort fallback: just use the first defined variant.
+            variant = next(iter(variants.keys()))
         else:
-            exec_latency += self.opcode.reg_reg_latency()
+            # Prefer reg_mem, then mem_reg, then reg_reg, then any.
+            preference = ("reg_mem", "mem_reg", "reg_reg")
+            for preferred in preference:
+                if preferred in matching:
+                    variant = preferred
+                    break
+            else:
+                variant = matching[0]
         
-        
-        # then add memory latency based on dcache simulation
-        if len(self.read_addrs) > 0:
-            # if read addresses is not empty, there must be a load
-            exec_latency += dcache.read(self.read_addrs[0]) 
-        
-        if len(self.write_addrs) > 0:
-            # must be a mem-to-reg (load) operation
-            # invoke cache model
-            exec_latency += dcache.write(self.write_addrs[0])
+        try:
+            op_lat = self.opcode.latency(variant)
+        except Exception:
+            raise ValueError(f"Error estimating {variant} latency for opcode: {self.opcode.name}")
             
+        exec_latency = op_lat
+        if num_read_addrs > 0:
+            exec_latency += max(dcache.read(addr) for addr in self.read_addrs)
+        if num_write_addrs > 0:
+            exec_latency += 1 
+
         return fetch_latency, exec_latency
-    
-    def __repr__(self):
-            """Helper for printing the object nicely."""
-            return (
-                f"Instruction(IP: {hex(self.inst_ptr)}, "
-                f"Opcode: {self.opcode.name}, "
-                f"Assembly: \"{self.assembly}\")"
-            )
+
     
     def __str__(self):
         """Returns a neat, human-readable string representation."""
+        def fmt_hex(x) -> str:
+            return hex(int(x))
+
+        def fmt_enum(x) -> str:
+            return getattr(x, "name", str(x))
+
+        def fmt_hex_list(xs) -> list[str]:
+            return [fmt_hex(x) for x in xs]
+
+        opcode_name = fmt_enum(self.opcode) if self.opcode is not None else "None"
+        branch_type = fmt_enum(self.branch_type) if self.branch_type is not None else "None"
+
         return (
-            f"Instruction @ {hex(self.inst_ptr)}\n"
-            f"  Assembly:       {self.assembly}\n"
-            f"  Category:       {self.category}\n"
-            f"  Opcode:         {self.opcode.name if self.opcode else 'None'}\n"
-            f"  Reads:          {[r.name for r in self.read_regs]}\n"
-            f"  Writes:         {[r.name for r in self.write_regs]}\n"
-            f"  Mem Reads:      {[hex(a) for a in self.read_addrs]}\n"
-            f"  Mem Writes:     {[hex(a) for a in self.write_addrs]}\n"
-            f"  Fetch Latency:  {self.fetch_latency}\n"
-            f"  Exec Latency:   {self.exec_latency}\n"
+            f"Instruction @ {fmt_hex(self.inst_ptr)}\n"
+            f"  Assembly:            {self.assembly}\n"
+            f"  Category:            {self.category}\n"
+            f"  Opcode:              {opcode_name}\n"
+            f"  Inst Sync:           {self.inst_sync}\n"
+            f"  Branch Type:         {branch_type}\n"
+            f"  Branch Taken:        {self.branch_taken}\n"
+            f"  Branch Target Addr:  {fmt_hex(self.branch_target_addr)}\n"
+            f"  Reads (regs):        {[fmt_enum(r) for r in self.read_regs]}\n"
+            f"  Writes (regs):       {[fmt_enum(r) for r in self.write_regs]}\n"
+            f"  Reg Dependent IPs:   {fmt_hex_list(self.reg_dependent_ips)}\n"
+            f"  Mem Reads (addrs):   {fmt_hex_list(self.read_addrs)}\n"
+            f"  Mem Writes (addrs):  {fmt_hex_list(self.write_addrs)}\n"
+            f"  Mem Dependent IPs:   {fmt_hex_list(self.mem_dependent_ips)}\n"
+            f"  Fetch Latency:       {self.fetch_latency}\n"
+            f"  Exec Latency:        {self.exec_latency}\n"
         )
     
