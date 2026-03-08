@@ -7,13 +7,17 @@
 
 // ---------------------------------------------------------------------------
 // Opcode category bitmask flags
-//   ALU       - integer arithmetic / logic / shift / bit-manipulation
-//   MUL       - integer multiply
-//   DIV       - integer divide
-//   FP        - floating-point and SIMD / vector
-//   LOAD      - reads from memory (inherently a load)
-//   STORE     - writes to memory (inherently a store)
-//   LOAD_STORE - reads AND writes memory (atomic RMW / string move)
+//   ALU          - scalar integer arithmetic / logic / shift / bit-manipulation
+//   ALU_MULT_DIV - scalar integer multiply and divide (disjoint from ALU)
+//   SIMD         - integer SIMD ops on XMM/YMM registers (disjoint from FP)
+//   FP           - scalar and packed floating-point ops (disjoint from SIMD)
+//   FP_MULT_DIV  - FP multiply, divide, sqrt, FMA (slow FP ports, disjoint from FP)
+//   LOAD         - reads from memory (inherently a load)
+//   STORE        - writes to memory (inherently a store)
+//   LOAD_STORE   - reads AND writes memory (atomic RMW / string move)
+//
+// Disjointness: an instruction belongs to exactly one of {ALU, ALU_MULT_DIV}
+// and exactly one of {SIMD, FP, FP_MULT_DIV} (or none).
 //
 // Note: LOAD and STORE are set only for opcodes that are *inherently*
 // load or store operations (non-temporal, string, gather/scatter, atomics).
@@ -24,12 +28,13 @@
 enum OpcodeCategory : uint8_t {
   OPCAT_NONE = 0x00,
   OPCAT_ALU = 0x01,
-  OPCAT_MUL = 0x02,
-  OPCAT_DIV = 0x04,
-  OPCAT_FP = 0x08,
+  OPCAT_ALU_MULT_DIV = 0x02,  // scalar integer multiply and divide
+  OPCAT_SIMD = 0x04,          // integer SIMD (XMM/YMM, disjoint from FP)
+  OPCAT_FP = 0x08,            // scalar/packed float (disjoint from SIMD)
   OPCAT_LOAD = 0x10,
   OPCAT_STORE = 0x20,
-  OPCAT_LOAD_STORE = 0x30,  // OPCAT_LOAD | OPCAT_STORE
+  OPCAT_LOAD_STORE = 0x30,   // OPCAT_LOAD | OPCAT_STORE
+  OPCAT_FP_MULT_DIV = 0x40,  // FP multiply, divide, sqrt, FMA (slow FP units)
 };
 
 // ---------------------------------------------------------------------------
@@ -47,20 +52,28 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"MOVSX", OPCAT_ALU},
       {"MOVZX", OPCAT_ALU},
       {"MOVSXD", OPCAT_ALU},
-      {"CMOVB", OPCAT_ALU},
-      {"CMOVNB", OPCAT_ALU},
-      {"CMOVZ", OPCAT_ALU},
-      {"CMOVNZ", OPCAT_ALU},
+      {"CMOVO", OPCAT_ALU},
+      {"CMOVNO", OPCAT_ALU},
+      {"CMOVB", OPCAT_ALU},   {"CMOVC", OPCAT_ALU},   {"CMOVNAE", OPCAT_ALU},
+      {"CMOVNB", OPCAT_ALU},  {"CMOVNC", OPCAT_ALU},  {"CMOVAE", OPCAT_ALU},
+      {"CMOVZ", OPCAT_ALU},   {"CMOVE", OPCAT_ALU},
+      {"CMOVNZ", OPCAT_ALU},  {"CMOVNE", OPCAT_ALU},
+      {"CMOVBE", OPCAT_ALU},  {"CMOVNA", OPCAT_ALU},
+      {"CMOVNBE", OPCAT_ALU}, {"CMOVA", OPCAT_ALU},
       {"CMOVS", OPCAT_ALU},
       {"CMOVNS", OPCAT_ALU},
-      {"CMOVBE", OPCAT_ALU},
-      {"CMOVNBE", OPCAT_ALU},
+      {"CMOVP", OPCAT_ALU},   {"CMOVPE", OPCAT_ALU},
+      {"CMOVNP", OPCAT_ALU},  {"CMOVPO", OPCAT_ALU},
+      {"CMOVL", OPCAT_ALU},   {"CMOVNGE", OPCAT_ALU},
+      {"CMOVNL", OPCAT_ALU},  {"CMOVGE", OPCAT_ALU},
+      {"CMOVLE", OPCAT_ALU},  {"CMOVNG", OPCAT_ALU},
+      {"CMOVNLE", OPCAT_ALU}, {"CMOVG", OPCAT_ALU},
       {"BSWAP", OPCAT_ALU},
       {"MOVBE", OPCAT_ALU},
       {"LEA", OPCAT_ALU},
-      {"PUSH", OPCAT_ALU},
-      {"POP", OPCAT_ALU},
-      {"LEAVE", OPCAT_ALU},
+      {"PUSH", OPCAT_ALU | OPCAT_STORE},
+      {"POP", OPCAT_ALU | OPCAT_LOAD},
+      {"LEAVE", OPCAT_ALU | OPCAT_LOAD},  // MOV RSP,RBP ; POP RBP
 
       // Arithmetic
       {"ADD", OPCAT_ALU},
@@ -115,11 +128,22 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"ANDN", OPCAT_ALU},
 
       // Setcc / flags
-      {"SETZ", OPCAT_ALU},
-      {"SETNZ", OPCAT_ALU},
-      {"SETNB", OPCAT_ALU},
       {"SETO", OPCAT_ALU},
-      {"SETNLE", OPCAT_ALU},
+      {"SETNO", OPCAT_ALU},
+      {"SETB", OPCAT_ALU},    {"SETC", OPCAT_ALU},    {"SETNAE", OPCAT_ALU},
+      {"SETNB", OPCAT_ALU},   {"SETNC", OPCAT_ALU},   {"SETAE", OPCAT_ALU},
+      {"SETZ", OPCAT_ALU},    {"SETE", OPCAT_ALU},
+      {"SETNZ", OPCAT_ALU},   {"SETNE", OPCAT_ALU},
+      {"SETBE", OPCAT_ALU},   {"SETNA", OPCAT_ALU},
+      {"SETNBE", OPCAT_ALU},  {"SETA", OPCAT_ALU},
+      {"SETS", OPCAT_ALU},
+      {"SETNS", OPCAT_ALU},
+      {"SETP", OPCAT_ALU},    {"SETPE", OPCAT_ALU},
+      {"SETNP", OPCAT_ALU},   {"SETPO", OPCAT_ALU},
+      {"SETL", OPCAT_ALU},    {"SETNGE", OPCAT_ALU},
+      {"SETNL", OPCAT_ALU},   {"SETGE", OPCAT_ALU},
+      {"SETLE", OPCAT_ALU},   {"SETNG", OPCAT_ALU},
+      {"SETNLE", OPCAT_ALU},  {"SETG", OPCAT_ALU},
       {"CLC", OPCAT_ALU},
       {"STC", OPCAT_ALU},
       {"CMC", OPCAT_ALU},
@@ -152,10 +176,10 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
 
       // Control transfer (branch condition evaluated on ALU port)
       {"JMP", OPCAT_ALU},
-      {"CALL", OPCAT_ALU},
-      {"CALL_NEAR", OPCAT_ALU},
-      {"RET", OPCAT_ALU},
-      {"RET_NEAR", OPCAT_ALU},
+      {"CALL", OPCAT_ALU | OPCAT_STORE},       // pushes return address
+      {"CALL_NEAR", OPCAT_ALU | OPCAT_STORE},
+      {"RET", OPCAT_ALU | OPCAT_LOAD},         // pops return address
+      {"RET_NEAR", OPCAT_ALU | OPCAT_LOAD},
       {"LOOP", OPCAT_ALU},
       {"JZ", OPCAT_ALU},
       {"JE", OPCAT_ALU},
@@ -180,173 +204,184 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"JRCXZ", OPCAT_ALU},
 
       // ===================================================================
-      //  MUL  –  integer multiply
+      //  ALU_MULT_DIV  –  integer multiply and divide (disjoint from ALU)
       // ===================================================================
-      {"MUL", OPCAT_MUL},
-      {"IMUL", OPCAT_MUL},
-      {"MULX", OPCAT_MUL},
+      {"MUL", OPCAT_ALU_MULT_DIV},
+      {"IMUL", OPCAT_ALU_MULT_DIV},
+      {"MULX", OPCAT_ALU_MULT_DIV},
+      {"DIV", OPCAT_ALU_MULT_DIV},
+      {"IDIV", OPCAT_ALU_MULT_DIV},
 
       // ===================================================================
-      //  DIV  –  integer divide
-      // ===================================================================
-      {"DIV", OPCAT_DIV},
-      {"IDIV", OPCAT_DIV},
-
-      // ===================================================================
-      //  FP  –  floating-point scalar, SSE/AVX vector (integer and float)
-      //         These all issue on the FP/vector execution ports.
+      //  SIMD  –  integer SIMD operations on XMM/YMM/ZMM registers.
+      //           Disjoint from FP: data is treated as integers, not floats.
       // ===================================================================
 
-      // --- Integer vector move ---
-      {"MOVD", OPCAT_FP},
-      {"MOVQ", OPCAT_FP},
-      {"MOVDQA", OPCAT_FP},
-      {"MOVDQU", OPCAT_FP},
-      {"VMOVD", OPCAT_FP},
-      {"VMOVDQA", OPCAT_FP},
-      {"VMOVDQU", OPCAT_FP},
-      {"LDDQU", OPCAT_FP | OPCAT_LOAD},
-      {"MOVNTQ", OPCAT_FP | OPCAT_STORE},
-      {"MOVNTDQ", OPCAT_FP | OPCAT_STORE},
-      {"MOVNTDQA", OPCAT_FP | OPCAT_LOAD},
-      {"PMOVMSKB", OPCAT_FP},
-      {"VPMOVMSKB", OPCAT_FP},
+      // Integer vector move
+      {"MOVD", OPCAT_SIMD},
+      {"MOVQ", OPCAT_SIMD},
+      {"MOVDQA", OPCAT_SIMD},
+      {"MOVDQU", OPCAT_SIMD},
+      {"VMOVD", OPCAT_SIMD},
+      {"VMOVDQA", OPCAT_SIMD},
+      {"VMOVDQU", OPCAT_SIMD},
+      {"LDDQU", OPCAT_SIMD | OPCAT_LOAD},
+      {"MOVNTQ", OPCAT_SIMD | OPCAT_STORE},
+      {"MOVNTDQ", OPCAT_SIMD | OPCAT_STORE},
+      {"MOVNTDQA", OPCAT_SIMD | OPCAT_LOAD},
+      {"PMOVMSKB", OPCAT_SIMD},
+      {"VPMOVMSKB", OPCAT_SIMD},
 
       // Pack / unpack
-      {"PACKSSWB", OPCAT_FP},
-      {"PACKSSDW", OPCAT_FP},
-      {"PACKUSWB", OPCAT_FP},
-      {"PACKUSDW", OPCAT_FP},
-      {"PUNPCKHBW", OPCAT_FP},
-      {"PUNPCKLBW", OPCAT_FP},
-      {"PUNPCKLWD", OPCAT_FP},
-      {"PUNPCKLDQ", OPCAT_FP},
-      {"PUNPCKLQDQ", OPCAT_FP},
+      {"PACKSSWB", OPCAT_SIMD},
+      {"PACKSSDW", OPCAT_SIMD},
+      {"PACKUSWB", OPCAT_SIMD},
+      {"PACKUSDW", OPCAT_SIMD},
+      {"PUNPCKHBW", OPCAT_SIMD},
+      {"PUNPCKHWD", OPCAT_SIMD},
+      {"PUNPCKHDQ", OPCAT_SIMD},
+      {"PUNPCKHQDQ", OPCAT_SIMD},
+      {"PUNPCKLBW", OPCAT_SIMD},
+      {"PUNPCKLWD", OPCAT_SIMD},
+      {"PUNPCKLDQ", OPCAT_SIMD},
+      {"PUNPCKLQDQ", OPCAT_SIMD},
 
       // Shuffle / permute
-      {"PSHUFB", OPCAT_FP},
-      {"PSHUFD", OPCAT_FP},
-      {"PSHUFW", OPCAT_FP},
-      {"PSHUFLW", OPCAT_FP},
-      {"PSHUFHW", OPCAT_FP},
-      {"PALIGNR", OPCAT_FP},
-      {"VALIGND", OPCAT_FP},
-      {"VALIGNQ", OPCAT_FP},
-      {"VPERMD", OPCAT_FP},
-      {"VPERMQ", OPCAT_FP},
-      {"VPERM2I128", OPCAT_FP},
+      {"PSHUFB", OPCAT_SIMD},
+      {"PSHUFD", OPCAT_SIMD},
+      {"PSHUFW", OPCAT_SIMD},
+      {"PSHUFLW", OPCAT_SIMD},
+      {"PSHUFHW", OPCAT_SIMD},
+      {"PALIGNR", OPCAT_SIMD},
+      {"VALIGND", OPCAT_SIMD},
+      {"VALIGNQ", OPCAT_SIMD},
+      {"VPERMD", OPCAT_SIMD},
+      {"VPERMQ", OPCAT_SIMD},
+      {"VPERM2I128", OPCAT_SIMD},
 
       // Insert / extract
-      {"PEXTRB", OPCAT_FP},
-      {"PEXTRW", OPCAT_FP},
-      {"PEXTRD", OPCAT_FP},
-      {"PEXTRQ", OPCAT_FP},
-      {"PINSRB", OPCAT_FP},
-      {"PINSRW", OPCAT_FP},
-      {"PINSRD", OPCAT_FP},
-      {"PINSRQ", OPCAT_FP},
-      {"VINSERTI128", OPCAT_FP},
-      {"VEXTRACTI128", OPCAT_FP},
+      {"PEXTRB", OPCAT_SIMD},
+      {"PEXTRW", OPCAT_SIMD},
+      {"PEXTRD", OPCAT_SIMD},
+      {"PEXTRQ", OPCAT_SIMD},
+      {"PINSRB", OPCAT_SIMD},
+      {"PINSRW", OPCAT_SIMD},
+      {"PINSRD", OPCAT_SIMD},
+      {"PINSRQ", OPCAT_SIMD},
+      {"VINSERTI128", OPCAT_SIMD},
+      {"VEXTRACTI128", OPCAT_SIMD},
 
-      // Broadcast / gather / scatter
-      {"VPBROADCASTB", OPCAT_FP},
-      {"VPBROADCASTD", OPCAT_FP},
-      {"VPBROADCASTQ", OPCAT_FP},
-      {"VPGATHERDD", OPCAT_FP | OPCAT_LOAD},
-      {"VPGATHERDQ", OPCAT_FP | OPCAT_LOAD},
-      {"VPSCATTERDD", OPCAT_FP | OPCAT_STORE},
-      {"VPSCATTERDQ", OPCAT_FP | OPCAT_STORE},
+      // Broadcast / gather / scatter (integer)
+      {"VPBROADCASTB", OPCAT_SIMD},
+      {"VPBROADCASTD", OPCAT_SIMD},
+      {"VPBROADCASTQ", OPCAT_SIMD},
+      {"VPGATHERDD", OPCAT_SIMD | OPCAT_LOAD},
+      {"VPGATHERDQ", OPCAT_SIMD | OPCAT_LOAD},
+      {"VPSCATTERDD", OPCAT_SIMD | OPCAT_STORE},
+      {"VPSCATTERDQ", OPCAT_SIMD | OPCAT_STORE},
 
       // Integer vector arithmetic
-      {"PADDB", OPCAT_FP},
-      {"PADDW", OPCAT_FP},
-      {"PADDD", OPCAT_FP},
-      {"PADDQ", OPCAT_FP},
-      {"PSUBB", OPCAT_FP},
-      {"PSUBW", OPCAT_FP},
-      {"PSUBD", OPCAT_FP},
-      {"PSUBQ", OPCAT_FP},
-      {"PADDSB", OPCAT_FP},
-      {"PADDSW", OPCAT_FP},
-      {"PADDUSB", OPCAT_FP},
-      {"PADDUSW", OPCAT_FP},
-      {"PHADDW", OPCAT_FP},
-      {"PHADDD", OPCAT_FP},
-      {"PHSUBW", OPCAT_FP},
-      {"PHSUBD", OPCAT_FP},
-      {"PAVGB", OPCAT_FP},
-      {"PAVGW", OPCAT_FP},
-      {"PABSB", OPCAT_FP},
-      {"PABSW", OPCAT_FP},
-      {"PABSD", OPCAT_FP},
-      {"PMINUB", OPCAT_FP},
-      {"VPMINUB", OPCAT_FP},
-      {"PMAXUB", OPCAT_FP},
+      {"PADDB", OPCAT_SIMD},
+      {"PADDW", OPCAT_SIMD},
+      {"PADDD", OPCAT_SIMD},
+      {"PADDQ", OPCAT_SIMD},
+      {"PSUBB", OPCAT_SIMD},
+      {"PSUBW", OPCAT_SIMD},
+      {"PSUBD", OPCAT_SIMD},
+      {"PSUBQ", OPCAT_SIMD},
+      {"PADDSB", OPCAT_SIMD},
+      {"PADDSW", OPCAT_SIMD},
+      {"PADDUSB", OPCAT_SIMD},
+      {"PADDUSW", OPCAT_SIMD},
+      {"PHADDW", OPCAT_SIMD},
+      {"PHADDD", OPCAT_SIMD},
+      {"PHSUBW", OPCAT_SIMD},
+      {"PHSUBD", OPCAT_SIMD},
+      {"PAVGB", OPCAT_SIMD},
+      {"PAVGW", OPCAT_SIMD},
+      {"PABSB", OPCAT_SIMD},
+      {"PABSW", OPCAT_SIMD},
+      {"PABSD", OPCAT_SIMD},
+      {"PMINUB", OPCAT_SIMD},
+      {"VPMINUB", OPCAT_SIMD},
+      {"PMAXUB", OPCAT_SIMD},
 
       // Integer vector multiply
-      {"PMULLW", OPCAT_FP},
-      {"PMULLD", OPCAT_FP},
-      {"PMULHW", OPCAT_FP},
-      {"PMULHUW", OPCAT_FP},
-      {"PMULUDQ", OPCAT_FP},
-      {"PMULDQ", OPCAT_FP},
-      {"PMADDWD", OPCAT_FP},
-      {"PMADDUBSW", OPCAT_FP},
-      {"VPDPBUSD", OPCAT_FP},
+      {"PMULLW", OPCAT_SIMD},
+      {"PMULLD", OPCAT_SIMD},
+      {"PMULHW", OPCAT_SIMD},
+      {"PMULHUW", OPCAT_SIMD},
+      {"PMULUDQ", OPCAT_SIMD},
+      {"PMULDQ", OPCAT_SIMD},
+      {"PMADDWD", OPCAT_SIMD},
+      {"PMADDUBSW", OPCAT_SIMD},
+      {"VPDPBUSD", OPCAT_SIMD},
 
       // Integer vector compare
-      {"PCMPEQB", OPCAT_FP},
-      {"PCMPEQW", OPCAT_FP},
-      {"PCMPEQD", OPCAT_FP},
-      {"PCMPEQQ", OPCAT_FP},
-      {"PCMPGTB", OPCAT_FP},
-      {"PCMPGTW", OPCAT_FP},
-      {"PCMPGTD", OPCAT_FP},
-      {"PCMPGTQ", OPCAT_FP},
-      {"VPCMPEQB", OPCAT_FP},
+      {"PCMPEQB", OPCAT_SIMD},
+      {"PCMPEQW", OPCAT_SIMD},
+      {"PCMPEQD", OPCAT_SIMD},
+      {"PCMPEQQ", OPCAT_SIMD},
+      {"PCMPGTB", OPCAT_SIMD},
+      {"PCMPGTW", OPCAT_SIMD},
+      {"PCMPGTD", OPCAT_SIMD},
+      {"PCMPGTQ", OPCAT_SIMD},
+      {"VPCMPEQB", OPCAT_SIMD},
 
       // Integer vector logical
-      {"PAND", OPCAT_FP},
-      {"PANDN", OPCAT_FP},
-      {"POR", OPCAT_FP},
-      {"PXOR", OPCAT_FP},
-      {"VPOR", OPCAT_FP},
-      {"VPXOR", OPCAT_FP},
-      {"PTEST", OPCAT_FP},
-      {"VPTEST", OPCAT_FP},
+      {"PAND", OPCAT_SIMD},
+      {"PANDN", OPCAT_SIMD},
+      {"POR", OPCAT_SIMD},
+      {"PXOR", OPCAT_SIMD},
+      {"VPOR", OPCAT_SIMD},
+      {"VPXOR", OPCAT_SIMD},
+      {"PTEST", OPCAT_SIMD},
+      {"VPTEST", OPCAT_SIMD},
 
       // Integer vector shift
-      {"PSLLW", OPCAT_FP},
-      {"PSLLD", OPCAT_FP},
-      {"PSLLQ", OPCAT_FP},
-      {"PSRLW", OPCAT_FP},
-      {"PSRLD", OPCAT_FP},
-      {"PSRLQ", OPCAT_FP},
-      {"PSRAW", OPCAT_FP},
-      {"PSRAD", OPCAT_FP},
-      {"PSLLDQ", OPCAT_FP},
-      {"PSRLDQ", OPCAT_FP},
+      {"PSLLW", OPCAT_SIMD},
+      {"PSLLD", OPCAT_SIMD},
+      {"PSLLQ", OPCAT_SIMD},
+      {"PSRLW", OPCAT_SIMD},
+      {"PSRLD", OPCAT_SIMD},
+      {"PSRLQ", OPCAT_SIMD},
+      {"PSRAW", OPCAT_SIMD},
+      {"PSRAD", OPCAT_SIMD},
+      {"PSLLDQ", OPCAT_SIMD},
+      {"PSRLDQ", OPCAT_SIMD},
 
-      // Crypto / string support
-      {"PCMPESTRI", OPCAT_FP},
-      {"PCMPESTRM", OPCAT_FP},
-      {"PCMPISTRI", OPCAT_FP},
-      {"PCMPISTRM", OPCAT_FP},
-      {"AESENC", OPCAT_FP},
-      {"AESENCLAST", OPCAT_FP},
-      {"AESDEC", OPCAT_FP},
-      {"AESDECLAST", OPCAT_FP},
-      {"PCLMULQDQ", OPCAT_FP},
-      {"SHA1RNDS4", OPCAT_FP},
-      {"SHA256RNDS2", OPCAT_FP},
+      // Crypto / string SIMD
+      {"PCMPESTRI", OPCAT_SIMD},
+      {"PCMPESTRM", OPCAT_SIMD},
+      {"PCMPISTRI", OPCAT_SIMD},
+      {"PCMPISTRM", OPCAT_SIMD},
+      {"AESENC", OPCAT_SIMD},
+      {"AESENCLAST", OPCAT_SIMD},
+      {"AESDEC", OPCAT_SIMD},
+      {"AESDECLAST", OPCAT_SIMD},
+      {"PCLMULQDQ", OPCAT_SIMD},
+      {"SHA1RNDS4", OPCAT_SIMD},
+      {"SHA256RNDS2", OPCAT_SIMD},
+
+      // ===================================================================
+      //  FP  –  scalar and packed floating-point operations.
+      //         Disjoint from SIMD: data is treated as floats.
+      // ===================================================================
 
       // FP scalar / packed move
       {"MOVAPS", OPCAT_FP},
       {"MOVAPD", OPCAT_FP},
       {"MOVUPS", OPCAT_FP},
+      {"MOVUPD", OPCAT_FP},
       {"MOVSS", OPCAT_FP},
       {"MOVSD", OPCAT_FP},
       {"MOVSD_XMM", OPCAT_FP},
+      {"VMOVAPS", OPCAT_FP},
+      {"VMOVAPD", OPCAT_FP},
+      {"VMOVUPS", OPCAT_FP},
+      {"VMOVUPD", OPCAT_FP},
+      {"VMOVSS", OPCAT_FP},
+      {"VMOVSD", OPCAT_FP},
       {"MOVHPS", OPCAT_FP},
       {"MOVHPD", OPCAT_FP},
       {"MOVLPS", OPCAT_FP},
@@ -392,27 +427,27 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       {"SUBSD", OPCAT_FP},
       {"SUBPS", OPCAT_FP},
       {"SUBPD", OPCAT_FP},
-      {"MULSS", OPCAT_FP},
-      {"MULSD", OPCAT_FP},
-      {"MULPS", OPCAT_FP},
-      {"MULPD", OPCAT_FP},
-      {"DIVSS", OPCAT_FP},
-      {"DIVSD", OPCAT_FP},
-      {"DIVPS", OPCAT_FP},
-      {"DIVPD", OPCAT_FP},
-      {"SQRTSS", OPCAT_FP},
-      {"SQRTSD", OPCAT_FP},
-      {"SQRTPS", OPCAT_FP},
-      {"SQRTPD", OPCAT_FP},
-      {"RSQRTSS", OPCAT_FP},
+      {"MULSS", OPCAT_FP_MULT_DIV},
+      {"MULSD", OPCAT_FP_MULT_DIV},
+      {"MULPS", OPCAT_FP_MULT_DIV},
+      {"MULPD", OPCAT_FP_MULT_DIV},
+      {"DIVSS", OPCAT_FP_MULT_DIV},
+      {"DIVSD", OPCAT_FP_MULT_DIV},
+      {"DIVPS", OPCAT_FP_MULT_DIV},
+      {"DIVPD", OPCAT_FP_MULT_DIV},
+      {"SQRTSS", OPCAT_FP_MULT_DIV},
+      {"SQRTSD", OPCAT_FP_MULT_DIV},
+      {"SQRTPS", OPCAT_FP_MULT_DIV},
+      {"SQRTPD", OPCAT_FP_MULT_DIV},
+      {"RSQRTSS", OPCAT_FP},   // ~4 cycle approx; same throughput as ADDSS
       {"RSQRTPS", OPCAT_FP},
-      {"RCPSS", OPCAT_FP},
+      {"RCPSS", OPCAT_FP},     // ~4 cycle approx; same throughput as ADDSS
       {"RCPPS", OPCAT_FP},
 
       // FMA
-      {"VFMADD132PS", OPCAT_FP},
-      {"VFMADD213PS", OPCAT_FP},
-      {"VFMADD231PS", OPCAT_FP},
+      {"VFMADD132PS", OPCAT_FP_MULT_DIV},
+      {"VFMADD213PS", OPCAT_FP_MULT_DIV},
+      {"VFMADD231PS", OPCAT_FP_MULT_DIV},
 
       // FP compare / logic
       {"CMPSS", OPCAT_FP},
@@ -454,10 +489,10 @@ inline const std::unordered_map<std::string, uint8_t>& opcode_category_map() {
       // FP math / special
       {"ROUNDPS", OPCAT_FP},
       {"ROUNDPD", OPCAT_FP},
-      {"DPPS", OPCAT_FP},
-      {"DPPD", OPCAT_FP},
+      {"DPPS", OPCAT_FP_MULT_DIV},  // 12-14 cycle latency on all uarchs
+      {"DPPD", OPCAT_FP_MULT_DIV},
       {"VZEROUPPER", OPCAT_FP},
-      {"FNSTCW", OPCAT_FP},
+      {"FNSTCW", OPCAT_FP | OPCAT_STORE},  // stores x87 control word to memory
 
       // ===================================================================
       //  LOAD  –  inherently memory-read (no separate store form)
@@ -504,14 +539,17 @@ inline uint8_t get_opcode_categories(const std::string& opcode) {
 inline bool opcode_is_alu(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_ALU;
 }
-inline bool opcode_is_mul(const std::string& op) {
-  return get_opcode_categories(op) & OPCAT_MUL;
+inline bool opcode_is_alu_mult_div(const std::string& op) {
+  return get_opcode_categories(op) & OPCAT_ALU_MULT_DIV;
 }
-inline bool opcode_is_div(const std::string& op) {
-  return get_opcode_categories(op) & OPCAT_DIV;
+inline bool opcode_is_simd(const std::string& op) {
+  return get_opcode_categories(op) & OPCAT_SIMD;
 }
 inline bool opcode_is_fp(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_FP;
+}
+inline bool opcode_is_fp_mult_div(const std::string& op) {
+  return get_opcode_categories(op) & OPCAT_FP_MULT_DIV;
 }
 inline bool opcode_is_load(const std::string& op) {
   return get_opcode_categories(op) & OPCAT_LOAD;

@@ -19,8 +19,6 @@ wheels/
 .DS_Store
 
 anamol/output
-
-ml_model/training_metrics/
-ml_model/plots/
-ml_model/checkpoints/
-ml_model/training_data/
+*.pkl
+*.npy
+anamol/traces

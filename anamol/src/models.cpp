@@ -11,7 +11,7 @@
 
 #include "instr.h"
 #include "params.h"
-#include "resources.h"
+#include "resource_registry.h"  // RESOURCE_REGISTRY (generated)
 
 namespace analytical {
 
@@ -19,6 +19,16 @@ using std::vector;
 
 const uint64_t CACHE_LINE_SIZE = 64;
 const uint64_t LARGE_CONSTANT = 1000000000ULL;
+
+// Sentinel throughput returned when a resource is not a bottleneck for this
+// window (no relevant instruction type present, or zero issue width).
+// Swap the active return to experiment:
+//   static_cast<double>(window.size())        natural window ceiling (current)
+//   std::numeric_limits<double>::infinity()   true "infinity"
+//   0.0                                       treat as fully blocking
+inline double unbottlenecked_thr(size_t window_size) {
+  return static_cast<double>(window_size);
+}
 
 ////////////////////////////////////////////////////////////////////////////
 // Base calculations
@@ -138,7 +148,7 @@ double get_thr_load_queue(const vector<Instr>& window,
   }
 
   // If no loads, this resource is not a bottleneck
-  if (loads.empty()) return window.size();
+  if (loads.empty()) return unbottlenecked_thr(window.size());
 
   uint32_t k = window.size();
   uint32_t n_loads = loads.size();
@@ -183,7 +193,7 @@ double get_thr_load_queue(const vector<Instr>& window,
   uint32_t total_cycles = commit[n_loads - 1];
 
   // Edge case: if all loads complete at cycle 0
-  if (total_cycles == 0) return window.size();
+  if (total_cycles == 0) return unbottlenecked_thr(window.size());
 
   return (double)k / total_cycles;
 }
@@ -200,7 +210,7 @@ double get_thr_store_queue(const vector<Instr>& window,
   }
 
   // If no stores, this resource is not a bottleneck
-  if (stores.empty()) return window.size();
+  if (stores.empty()) return unbottlenecked_thr(window.size());
 
   uint32_t k = window.size();
   uint32_t n_stores = stores.size();
@@ -245,7 +255,7 @@ double get_thr_store_queue(const vector<Instr>& window,
   uint32_t total_cycles = commit[n_stores - 1];
 
   // Edge case: if all stores complete at cycle 0
-  if (total_cycles == 0) return window.size();
+  if (total_cycles == 0) return unbottlenecked_thr(window.size());
 
   return (double)k / total_cycles;
 }
@@ -260,10 +270,10 @@ double get_thr_alu_issue(const vector<Instr>& window,
   }
 
   // Handle edge case: no ALU instructions
-  if (n_alu == 0) return window.size();
+  if (n_alu == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_issue_width == 0) return window.size();
+  // if (alu_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_alu / alu_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -271,43 +281,22 @@ double get_thr_alu_issue(const vector<Instr>& window,
   return k / cycles_needed;
 }
 
-// 4a. ALU Multiply Issue Width Throughput
-double get_thr_alu_mul_issue(const vector<Instr>& window,
-                             uint16_t alu_mul_issue_width) {
-  // Count ALU multiply instructions in the window
-  int n_mul = 0;
+// 4a. ALU Multiply/Divide Issue Width Throughput
+double get_thr_alu_mult_div_issue(const vector<Instr>& window,
+                                  uint16_t alu_mult_div_issue_width) {
+  // Count ALU multiply and divide instructions in the window
+  int n_mult_div = 0;
   for (const auto& instr : window) {
-    n_mul += instr.is_mul;
+    n_mult_div += instr.is_alu_mult_div;
   }
 
-  // Handle edge case: no MUL instructions
-  if (n_mul == 0) return window.size();
+  // Handle edge case: no MUL/DIV instructions
+  if (n_mult_div == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_mul_issue_width == 0) return window.size();
+  // if (alu_mult_div_issue_width == 0) return window.size();
   uint32_t k = window.size();
-  double cycles_needed = (double)n_mul / alu_mul_issue_width;
-  if (cycles_needed < 1.0) cycles_needed = 1.0;
-
-  return k / cycles_needed;
-}
-
-// 4b. ALU Divide Issue Width Throughput
-double get_thr_alu_div_issue(const vector<Instr>& window,
-                             uint16_t alu_div_issue_width) {
-  // Count ALU divide instructions in the window
-  int n_div = 0;
-  for (const auto& instr : window) {
-    n_div += instr.is_div;
-  }
-
-  // Handle edge case: no DIV instructions
-  if (n_div == 0) return window.size();
-
-  // Protect against zero issue width and ensure at least 1 cycle
-  if (alu_div_issue_width == 0) return window.size();
-  uint32_t k = window.size();
-  double cycles_needed = (double)n_div / alu_div_issue_width;
+  double cycles_needed = (double)n_mult_div / alu_mult_div_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
 
   return k / cycles_needed;
@@ -322,12 +311,33 @@ double get_thr_fp_issue(const vector<Instr>& window, uint16_t fp_issue_width) {
   }
 
   // Handle edge case: no FP instructions
-  if (n_fp == 0) return window.size();
+  if (n_fp == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (fp_issue_width == 0) return window.size();
+  // if (fp_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_fp / fp_issue_width;
+  if (cycles_needed < 1.0) cycles_needed = 1.0;
+
+  return k / cycles_needed;
+}
+
+// 5a. FP Multiply/Divide Issue Width Throughput
+double get_thr_fp_mult_div_issue(const vector<Instr>& window,
+                                 uint16_t fp_mult_div_issue_width) {
+  // Count FP multiply/divide/sqrt/FMA instructions in the window
+  int n_fp_mult_div = 0;
+  for (const auto& instr : window) {
+    n_fp_mult_div += instr.is_fp_mult_div;
+  }
+
+  // Handle edge case: no FP mult/div instructions
+  if (n_fp_mult_div == 0) return unbottlenecked_thr(window.size());
+
+  // Protect against zero issue width and ensure at least 1 cycle
+  // if (fp_mult_div_issue_width == 0) return window.size();
+  uint32_t k = window.size();
+  double cycles_needed = (double)n_fp_mult_div / fp_mult_div_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
 
   return k / cycles_needed;
@@ -342,10 +352,10 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
   }
 
   // Handle edge case: no Load/Store instructions
-  if (n_ls == 0) return window.size();
+  if (n_ls == 0) return unbottlenecked_thr(window.size());
 
   // Protect against zero issue width and ensure at least 1 cycle
-  if (ls_issue_width == 0) return window.size();
+  // if (ls_issue_width == 0) return window.size();
   uint32_t k = window.size();
   double cycles_needed = (double)n_ls / ls_issue_width;
   if (cycles_needed < 1.0) cycles_needed = 1.0;
@@ -354,8 +364,9 @@ double get_thr_ls_issue(const vector<Instr>& window, uint16_t ls_issue_width) {
 }
 
 // 7. Load/Load-Store Pipes Lower Bound Throughput
-double get_thr_ls_pipes_lower(const vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+double get_thr_load_ls_pipes_lower(const vector<Instr>& window,
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes) {
   // Based on worst-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -363,19 +374,18 @@ double get_thr_ls_pipes_lower(const vector<Instr>& window,
     n_store += instr.is_store;
   }
 
-  if (n_load == 0 && n_store == 0) return window.size();
+  if (n_load == 0 && n_store == 0) return unbottlenecked_thr(window.size());
 
   double t_max = (double)n_load / (num_ls_pipes + num_load_pipes) +
                  (double)n_store / num_ls_pipes;
-
-  if (t_max == 0) return window.size();
 
   return window.size() / t_max;
 }
 
 // 8. Load/Load-Store Pipes Upper Bound Throughput
-double get_thr_ls_pipes_upper(const vector<Instr>& window,
-                              uint16_t num_ls_pipes, uint16_t num_load_pipes) {
+double get_thr_load_ls_pipes_upper(const vector<Instr>& window,
+                                   uint16_t num_ls_pipes,
+                                   uint16_t num_load_pipes) {
   // Based on best-case allocation scenario
   int n_load = 0, n_store = 0;
   for (const auto& instr : window) {
@@ -383,7 +393,7 @@ double get_thr_ls_pipes_upper(const vector<Instr>& window,
     n_store += instr.is_store;
   }
 
-  if (n_load == 0 && n_store == 0) return window.size();
+  if (n_load == 0 && n_store == 0) return unbottlenecked_thr(window.size());
 
   // Best-case: stores use LSPs while loads use LPs concurrently
   // Time to complete all stores using LS pipes
@@ -397,8 +407,6 @@ double get_thr_ls_pipes_upper(const vector<Instr>& window,
 
   // Remaining loads share LS pipes after stores complete
   double t_min = t_store + n_remaining_load / (num_ls_pipes + num_load_pipes);
-
-  if (t_min == 0) return window.size();
 
   return window.size() / t_min;
 }
@@ -515,86 +523,141 @@ double get_thr_fetch_buffers(const vector<Instr>& window,
 }
 
 // main entry
-PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size) {
+PerResThrVecs get_throughput(vector<Instr> instr_trace, int window_size,
+                             std::optional<bool> latency_dep_filter) {
   if (instr_trace.empty()) return {};
 
   PerResThrVecs PER_RES_THR_VECS;
 
-  // clear any previous results (single-thread)
-  for (auto& v : PER_RES_THR_VECS) v.clear();
+  size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
+
+  // Phase 1 (serial): build a flat list of (resource, param-combo) work units
+  // and pre-populate PER_RES_THR_VECS with correct sizes and metadata.
+  // Pre-allocation here means Phase 2 threads never resize any container,
+  // so writes to different (res_idx, p_idx) slots are race-free.
+  struct ParamUnit {
+    size_t res_idx;
+    size_t p_idx;
+    ThrFunc func;
+    std::vector<uint16_t> params;
+  };
+  std::vector<ParamUnit> param_units;
+
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (!entry.enabled) continue;
+    if (latency_dep_filter.has_value() &&
+        entry.latency_dependent != latency_dep_filter.value())
+      continue;
+
+    size_t res_idx = static_cast<size_t>(entry.resource);
+    auto& vecs = PER_RES_THR_VECS[res_idx];
+
+    size_t p_idx = 0;
+    for (const auto& params : entry.sweep) {
+      if (vecs.size() <= p_idx) vecs.resize(p_idx + 1);
+
+      ThrVec& tv = vecs[p_idx];
+      tv.double_params = (params.size() > 1);
+      tv.p0 = params.size() > 0 ? params[0] : 0;
+      tv.p1 = params.size() > 1 ? params[1] : 0;
+      tv.data.assign(num_windows, 0.0);
+
+      param_units.push_back({res_idx, p_idx, entry.func, params});
+      ++p_idx;
+    }
+  }
+
+  // Phase 2 (parallel): one thread per (resource, param-combo) work unit.
+  // Each unit owns a unique (res_idx, p_idx) slot → no races, no critical
+  // sections, no thread-local storage needed.
+#pragma omp parallel for schedule(dynamic)
+  for (int pu_idx = 0; pu_idx < (int)param_units.size(); ++pu_idx) {
+    const auto& pu = param_units[pu_idx];
+    ThrVec& tv = PER_RES_THR_VECS[pu.res_idx][pu.p_idx];
+
+    for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
+      size_t start_idx = (size_t)win_idx * window_size;
+      size_t end_idx =
+          std::min(start_idx + (size_t)window_size, instr_trace.size());
+
+      vector<Instr> window(instr_trace.begin() + start_idx,
+                           instr_trace.begin() + end_idx);
+
+      tv.data[win_idx] = pu.func(window, pu.params);
+    }
+  }
+
+  return PER_RES_THR_VECS;
+}
+
+// Single-config throughput: computes throughput for exactly one set of param
+// values.
+PerResThrVecs get_throughput_single_config(
+    vector<Instr> instr_trace, int window_size,
+    const std::map<std::string, uint16_t>& config,
+    std::optional<bool> latency_dep_filter) {
+  if (instr_trace.empty()) return {};
+
+  PerResThrVecs PER_RES_THR_VECS;
 
   size_t num_windows = (instr_trace.size() + window_size - 1) / window_size;
 
-  // Parallel over resources, parameter sweeps, and windows
-#pragma omp parallel
-  {
-    // We will build thread-local results, then merge
-    PerResThrVecs local_thr_vecs;
+  struct ParamUnit {
+    size_t res_idx;
+    ThrFunc func;
+    std::vector<uint16_t> params;
+  };
+  std::vector<ParamUnit> param_units;
 
-    // Iterate resources in parallel (all threads share work)
-#pragma omp for schedule(dynamic)
-    for (size_t res_idx = 0; res_idx < (size_t)Resource::COUNT; ++res_idx) {
-      const auto& res_meta = RESOURCE_TABLE[res_idx];
-      auto& local_vecs_for_res = local_thr_vecs[res_idx];
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (!entry.enabled) continue;
+    if (latency_dep_filter.has_value() &&
+        entry.latency_dependent != latency_dep_filter.value())
+      continue;
 
-      // Pre-size local_vecs_for_res to number of param combos
-      size_t num_param_combos = std::distance(res_meta.param_sweep.begin(),
-                                              res_meta.param_sweep.end());
-      local_vecs_for_res.resize(num_param_combos);
-
-      // Parallelize over parameter combinations
-      size_t combo_idx = 0;
-      for (const auto& params : res_meta.param_sweep) {
-        size_t p_idx = combo_idx++;
-
-        ThrVec tv;
-        tv.double_params = (params.size() > 1);
-        tv.p0 = params.size() > 0 ? params[0] : 0;
-        tv.p1 = params.size() > 1 ? params[1] : 0;
-        tv.data.resize(num_windows);
-
-        // Parallelize over windows
-#pragma omp parallel for schedule(static)
-        for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
-          size_t start_idx = (size_t)win_idx * window_size;
-          size_t end_idx =
-              std::min(start_idx + (size_t)window_size, instr_trace.size());
-
-          vector<Instr> window(instr_trace.begin() + start_idx,
-                               instr_trace.begin() + end_idx);
-
-          double thr = res_meta.get_thr(window, params);
-          tv.data[win_idx] = thr;
-        }
-
-        local_vecs_for_res[p_idx] = std::move(tv);
+    // Build param vector from config using entry.param_names
+    std::vector<uint16_t> params;
+    for (const auto& pname : entry.param_names) {
+      auto it = config.find(pname);
+      if (it != config.end()) {
+        params.push_back(it->second);
+      } else {
+        std::cerr << "Warning: param '" << pname
+                  << "' not found in config for resource '" << entry.name
+                  << "', using 0\n";
+        params.push_back(0);
       }
     }
 
-    // Merge thread-local results into global PER_RES_THR_VECS
-#pragma omp critical
-    {
-      for (size_t res_idx = 0; res_idx < (size_t)Resource::COUNT; ++res_idx) {
-        auto& global_vecs = PER_RES_THR_VECS[res_idx];
-        auto& local_vecs = local_thr_vecs[res_idx];
-        if (!local_vecs.empty()) {
-          // Initialize global container once
-          if (global_vecs.empty()) {
-            global_vecs.resize(local_vecs.size());
-          }
-          // Merge each ThrVec (same param index goes to same slot)
-          for (size_t i = 0; i < local_vecs.size(); ++i) {
-            if (!local_vecs[i].data.empty()) {
-              // If this slot is unused, move it
-              if (global_vecs[i].data.empty()) {
-                global_vecs[i] = std::move(local_vecs[i]);
-              }
-            }
-          }
-        }
-      }
+    size_t res_idx = static_cast<size_t>(entry.resource);
+    auto& vecs = PER_RES_THR_VECS[res_idx];
+    vecs.resize(1);
+
+    ThrVec& tv = vecs[0];
+    tv.double_params = (params.size() > 1);
+    tv.p0 = params.size() > 0 ? params[0] : 0;
+    tv.p1 = params.size() > 1 ? params[1] : 0;
+    tv.data.assign(num_windows, 0.0);
+
+    param_units.push_back({res_idx, entry.func, params});
+  }
+
+#pragma omp parallel for schedule(dynamic)
+  for (int pu_idx = 0; pu_idx < (int)param_units.size(); ++pu_idx) {
+    const auto& pu = param_units[pu_idx];
+    ThrVec& tv = PER_RES_THR_VECS[pu.res_idx][0];
+
+    for (int win_idx = 0; win_idx < (int)num_windows; ++win_idx) {
+      size_t start_idx = (size_t)win_idx * window_size;
+      size_t end_idx =
+          std::min(start_idx + (size_t)window_size, instr_trace.size());
+
+      vector<Instr> window(instr_trace.begin() + start_idx,
+                           instr_trace.begin() + end_idx);
+
+      tv.data[win_idx] = pu.func(window, pu.params);
     }
-  }  // end outer omp parallel
+  }
 
   return PER_RES_THR_VECS;
 }
@@ -692,38 +755,6 @@ std::vector<RobLatencyData> get_rob_latency_analysis(
   return results;
 }
 
-// Helper: map Resource enum to file-friendly name
-static const char* resource_file_name(Resource res) {
-  switch (res) {
-    case Resource::ROB:
-      return "ROB";
-    case Resource::LOAD_QUEUE:
-      return "LOAD_QUEUE";
-    case Resource::STORE_QUEUE:
-      return "STORE_QUEUE";
-    case Resource::ALU_ISSUE:
-      return "ALU_ISSUE";
-    case Resource::ALU_MUL_ISSUE:
-      return "ALU_MUL_ISSUE";
-    case Resource::ALU_DIV_ISSUE:
-      return "ALU_DIV_ISSUE";
-    case Resource::FP_ISSUE:
-      return "FP_ISSUE";
-    case Resource::LS_ISSUE:
-      return "LS_ISSUE";
-    case Resource::LOAD_LS_PIPES_LOWER:
-      return "LOAD_LS_PIPES_LOWER";
-    case Resource::LOAD_LS_PIPES_UPPER:
-      return "LOAD_LS_PIPES_UPPER";
-    case Resource::ICACHE_FILLS:
-      return "ICACHE_FILLS";
-    case Resource::FETCH_BUFFERS:
-      return "FETCH_BUFFERS";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 // Minimal NumPy .npy v1.0 writer for 2D float64 arrays in C-order.
 // shape: (rows, cols), data: rows*cols doubles, row-major.
 static void write_npy_2d_float64(const std::string& filename, size_t rows,
@@ -785,14 +816,15 @@ static void write_npy_2d_float64(const std::string& filename, size_t rows,
   ofs.close();
 }
 
-void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
-  const size_t num_resources = static_cast<size_t>(Resource::COUNT);
+void export_throughputs(PerResThrVecs PER_RES_THR_VECS,
+                        const std::string& output_dir) {
+  // Ensure output directory exists.
+  std::system(("mkdir -p " + output_dir).c_str());
 
-  // Ensure output directory exists (simple, portable approach via system()).
-  std::system("mkdir -p output");
+  for (const auto& entry : RESOURCE_REGISTRY) {
+    if (!entry.enabled) continue;
 
-  for (size_t r = 0; r < num_resources; ++r) {
-    Resource res = static_cast<Resource>(r);
+    size_t r = static_cast<size_t>(entry.resource);
     const auto& thr_vecs = PER_RES_THR_VECS[r];
 
     // Skip resources with no data
@@ -816,38 +848,32 @@ void export_throughputs(PerResThrVecs PER_RES_THR_VECS) {
       const ThrVec& tv = thr_vecs[i];
       size_t base = i * cols;
 
-      // Param count
       array[base + 0] = double_params ? 2.0 : 1.0;
-
-      // Parameter values
       array[base + 1] = static_cast<double>(tv.p0);
       if (double_params) {
         array[base + 2] = static_cast<double>(tv.p1);
       }
 
-      // Throughput data starts after param_cols
       const size_t w = std::min(num_windows, tv.data.size());
       for (size_t j = 0; j < w; ++j) {
         array[base + param_cols + j] = tv.data[j];
       }
     }
 
-    // Build lowercase filename: output/thr_<resource>.npy
-    std::string res_name = resource_file_name(res);
-    for (auto& c : res_name) c = static_cast<char>(std::tolower(c));
-
-    std::string fname = std::string("output/thr_") + res_name + ".npy";
+    // Filename uses the canonical resource name from the registry.
+    std::string fname = output_dir + "/thr_" + entry.name + ".npy";
     write_npy_2d_float64(fname, rows, cols, array);
   }
 }
 
-void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
+void export_latency_analysis(const std::vector<RobLatencyData>& latency_data,
+                             const std::string& output_dir) {
   if (latency_data.empty()) return;
 
-  std::cout << "\nExporting latency analysis to ./output ...\n";
+  std::cout << "\nExporting latency analysis to " << output_dir << " ...\n";
 
   // Ensure output directory exists
-  std::system("mkdir -p output");
+  std::system(("mkdir -p " + output_dir).c_str());
 
   size_t num_rob_sizes = latency_data.size();
   size_t num_instructions = latency_data[0].issue_latencies.size();
@@ -859,8 +885,8 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
       thr_data[i * 2 + 0] = latency_data[i].rob_size;
       thr_data[i * 2 + 1] = latency_data[i].overall_throughput;
     }
-    write_npy_2d_float64("output/rob_latency_overall_thr.npy", num_rob_sizes, 2,
-                         thr_data);
+    write_npy_2d_float64(output_dir + "/rob_latency_overall_thr.npy",
+                         num_rob_sizes, 2, thr_data);
     std::cout << "  Wrote rob_latency_overall_thr.npy (" << num_rob_sizes
               << " x 2)\n";
   }
@@ -874,7 +900,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
             latency_data[i].issue_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_issue.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_issue.npy", num_rob_sizes,
                          num_instructions, issue_data);
     std::cout << "  Wrote rob_latency_issue.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
@@ -889,7 +915,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
             latency_data[i].commit_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_commit.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_commit.npy", num_rob_sizes,
                          num_instructions, commit_data);
     std::cout << "  Wrote rob_latency_commit.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
@@ -904,7 +930,7 @@ void export_latency_analysis(const std::vector<RobLatencyData>& latency_data) {
         exec_data[i * num_instructions + j] = latency_data[i].exec_latencies[j];
       }
     }
-    write_npy_2d_float64("output/rob_latency_exec.npy", num_rob_sizes,
+    write_npy_2d_float64(output_dir + "/rob_latency_exec.npy", num_rob_sizes,
                          num_instructions, exec_data);
     std::cout << "  Wrote rob_latency_exec.npy (" << num_rob_sizes << " x "
               << num_instructions << ")\n";
