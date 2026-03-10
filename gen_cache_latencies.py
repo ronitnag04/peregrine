@@ -125,10 +125,6 @@ def main():
     tmp_path = os.path.join(trace_dir, f".{stem}_latencies_tmp.npy")
     tasks = [(i, l1i, l1d, l2) for i, (l1i, l1d, l2) in enumerate(configs)]
 
-    # try on one config first
-    idx, l1i, l1d, l2 = tasks[0]
-    latencies = run_sim(trace_filename, l1i, l1d, l2)
-
     renamed = False
     mmap = None
     try:

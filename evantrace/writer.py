@@ -54,13 +54,13 @@ class Writer:
                         "IP": f"{inst.inst_ptr:#x}", # Formats as 0x...
                         "Assembly": inst.assembly,
                         "Category": inst.category,
-                        "Opcode": inst.opcode.name if inst.opcode else "",
+                        "Opcode": inst.opcode or "",
                         "Branch Type": inst.branch_type.name if inst.branch_type else "",
                         "Branch Taken": str(inst.branch_taken).lower() if inst.branch_type else "",
                         "Branch Target Address": f"{inst.branch_target_addr:#x}" if inst.branch_type else "",
                         "Instruction Sync": str(inst.inst_sync).lower(),
-                        "Read Registers": self._format_enum_list(inst.read_regs),
-                        "Write Registers": self._format_enum_list(inst.write_regs),
+                        "Read Registers": self._format_reg_list(inst.read_regs),
+                        "Write Registers": self._format_reg_list(inst.write_regs),
                         "Register Dependent IPs": self._format_hex_list(inst.reg_dependent_ips),
                         "Read Addresses": self._format_hex_list(inst.read_addrs),
                         "Write Addresses": self._format_hex_list(inst.write_addrs),
@@ -75,11 +75,11 @@ class Writer:
         except IOError as e:
             print(f"Error writing to file '{self.filepath}': {e}")
 
-    def _format_enum_list(self, items: List[Any]) -> str:
-        """Joins enum names with semicolons."""
+    def _format_reg_list(self, items: List[Any]) -> str:
+        """Joins register names with semicolons (items are plain strings)."""
         if not items:
             return ""
-        return ";".join([item.name for item in items])
+        return ";".join(str(item) for item in items)
 
     def _format_hex_list(self, items: List[np.uint64]) -> str:
         """Joins hex numbers with semicolons."""
