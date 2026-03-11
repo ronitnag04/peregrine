@@ -4,7 +4,7 @@ sweep_to_training.py — Generate training data from gem5 simulation sweep resul
 For each row in a sweep CSV (produced by a gem5 parameter sweep), this script:
   1. Maps gem5 parameter names/formats → anamol Config
   2. Runs the analytical model (anamol binary) for that specific config on the
-     matching benchmark trace (traces/<benchmark>-pin/)
+     matching benchmark trace (traces/<benchmark>/)
   3. Computes training features directly from the output .npy files
      (no lookup table required)
   4. Appends the CPI target from the CSV row
@@ -356,7 +356,7 @@ def process_sweep_csv(
 
     Args:
         sweep_csv:       Path to gem5 sweep results CSV (columns: cpi, benchmark, ...)
-        traces_dir:      Base directory for benchmark traces; expects <dir>/<benchmark>-pin/
+        traces_dir:      Base directory for benchmark traces; expects <dir>/<benchmark>/
         benchmarks:      Whitelist of benchmark names to process (None = all)
         window_size:     Sliding window size for the analytical model
         do_sweep:        If True, build a lookup table from sweep outputs and use it for
@@ -397,7 +397,7 @@ def process_sweep_csv(
     unique_benchmarks = df["benchmark"].unique().tolist()
     valid_benchmarks = []
     for bm in unique_benchmarks:
-        trace_dir = traces_dir / f"{bm}-pin"
+        trace_dir = traces_dir / bm
         if not (trace_dir / "trace.csv").exists():
             print(f"  WARNING: trace not found for '{bm}' at {trace_dir}/trace.csv — skipping")
         else:
@@ -426,7 +426,7 @@ def process_sweep_csv(
     for row_idx, row in df.iterrows():
         benchmark = row["benchmark"]
         cpi = float(row["cpi"])
-        trace_dir = traces_dir / f"{benchmark}-pin"
+        trace_dir = traces_dir / benchmark
 
         if log_level >= 2:
             print(f"\n[{row_idx + 1}/{n_total}] benchmark={benchmark}, cpi={cpi:.4f}")
@@ -591,12 +591,12 @@ def _process_with_sweep(
 
     # Resolve per-benchmark output directories and build/load lookup tables
     for benchmark in unique_benchmarks:
-        trace_dir = traces_dir / f"{benchmark}-pin"
+        trace_dir = traces_dir / benchmark
 
         if precomputed_dir is not None:
             # Use existing outputs; skip binary run.
-            # anamol writes to output/<trace_dir_name>/ which is <benchmark>-pin.
-            bm_output_dir = Path(precomputed_dir) / f"{benchmark}-pin"
+            # anamol writes to output/<benchmark>/ when using precomputed outputs.
+            bm_output_dir = Path(precomputed_dir) / benchmark
             if not bm_output_dir.exists():
                 print(
                     f"  WARNING: precomputed output not found at {bm_output_dir} "
@@ -634,7 +634,7 @@ def _process_with_sweep(
     # Precompute stall features per benchmark once (expensive: reads full trace CSV)
     stall_features_cache: dict = {}
     for bm in bm_output_dirs:
-        trace_file = str(traces_dir / f"{bm}-pin" / "trace.csv")
+        trace_file = str(traces_dir / bm / "trace.csv")
         stall_features_cache[bm] = compute_pipeline_stall_features(trace_file, window_size)
 
     # Precompute ROB latency features per (benchmark, cache_config_idx)
@@ -657,7 +657,7 @@ def _process_with_sweep(
     # Precompute bp json per benchmark (workers do a dict lookup instead of file I/O)
     bp_json_cache: dict = {}
     for bm in bm_output_dirs:
-        bp_json = traces_dir / f"{bm}-pin" / "trace_bp.json"
+        bp_json = traces_dir / bm / "trace_bp.json"
         if bp_json.exists():
             with open(bp_json) as f:
                 bp_json_cache[bm] = json.load(f)
