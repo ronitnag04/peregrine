@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import joblib
 
 from model import PeregrineMLModel
 
@@ -17,18 +19,18 @@ import torch_xla
 
 
 def load_dataset(dataset_path: str) -> pd.DataFrame:
-    return pd.read_csv(dataset_path, index_col=0)
+    return pd.read_csv(dataset_path)
 
 
 def train_epoch(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, optimizer: optim.Optimizer, device: str) -> float:
     model.train()
     total_loss = 0.0
-    for inputs, targets in loader:
-        inputs = inputs.view(inputs.size(0), -1)
-        inputs = inputs.to(device)
+    for prog_inputs, config_inputs, targets in loader:
+        prog_inputs = prog_inputs.to(device)
+        config_inputs = config_inputs.to(device)
         targets = targets.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs)
+        outputs = model(prog_inputs, config_inputs)
         loss = loss_fn(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -43,13 +45,13 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     total_percent_error = 0.0
     num_batches = 0
     with torch.no_grad():
-        for inputs, targets in loader:
-            inputs = inputs.view(inputs.size(0), -1)
-            inputs = inputs.to(device)
+        for prog_inputs, config_inputs, targets in loader:
+            prog_inputs = prog_inputs.to(device)
+            config_inputs = config_inputs.to(device)
             targets = targets.to(device)
-            outputs = model(inputs)
+            outputs = model(prog_inputs, config_inputs)
             loss = criterion(outputs, targets)
-            torch_xla.sync() 
+            torch_xla.sync()
             total_loss += loss.detach().to("cpu")
             # Compute mean absolute percent error for this batch.
             # Add small epsilon to denominator to avoid division by zero.
@@ -66,12 +68,43 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     return float(avg_loss), float(avg_percent_error)
 
 
+def benchmark_train_test_split(dataset: pd.DataFrame, test_benchmarks: list[str]) -> None:
+    train_dataset = dataset[~dataset["benchmark"].isin(test_benchmarks)]
+    test_dataset = dataset[dataset["benchmark"].isin(test_benchmarks)]
+    return train_dataset, test_dataset
+
+
+def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
+    stride_prefetch_dummies = pd.get_dummies(features["stride_prefetcher_degree"], prefix="stride_prefetcher_degree")
+    features = features.drop(columns=["cpi", "benchmark", "stride_prefetcher_degree"])
+    features = pd.concat([features, stride_prefetch_dummies], axis=1)
+
+    memsize_colummns = ["l1d_size", "l1i_size", "l2_size"]
+    for col in memsize_colummns:
+        features[col] = features[col].apply(lambda x: 
+            int(x.replace("KiB", "")) * 1024 if "KiB" in x 
+            else int(x.replace("MiB", "")) * 1024**2 if "MiB" in x 
+            else int(x))
+
+    return features
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the Peregrine ML model using PyTorch and XLA with the AWS Neuron SDK.")
     parser.add_argument(
         "-d",
         "--dataset-path",
         help="Path to the Peregrine dataset csv file",
+    )
+    parser.add_argument(
+        "--test-benchmarks",
+        help="Comma-separated list of benchmarks to use for testing",
+        default="",
+    )
+    parser.add_argument(
+        "--drop-benchmarks",
+        help="Comma-separated list of benchmarks to drop entirely from training and testing",
+        default="",
     )
     return parser.parse_args()
 
@@ -81,35 +114,81 @@ def main() -> None:
     dataset_name = os.path.basename(args.dataset_path).split('.')[0]
     dataset = load_dataset(args.dataset_path)
 
+    # Optionally drop benchmarks considered outliers from the dataset entirely.
+    if args.drop_benchmarks:
+        drop_list = [b.strip() for b in args.drop_benchmarks.split(",") if b.strip()]
+        if drop_list:
+            before = len(dataset)
+            dataset = dataset[~dataset["benchmark"].isin(drop_list)]
+            after = len(dataset)
+            print(f"Dropped benchmarks {drop_list}: {before - after} rows removed, {after} remaining.")
+
     # dataset = dataset.sample(frac=0.5)
     print(f'Dataset size: {dataset.shape[0]}')
 
-    train_dataset, test_dataset = train_test_split(dataset, test_size=0.25, random_state=42)
+    if args.test_benchmarks:
+        test_benchmarks = [b.strip() for b in args.test_benchmarks.split(",") if b.strip()]
+        print(f"Using test benchmarks: {test_benchmarks}")
+        train_dataset, test_dataset = benchmark_train_test_split(dataset, test_benchmarks)
+        print(f"Train dataset size: {train_dataset.shape[0]}")
+        print(f"Test dataset size: {test_dataset.shape[0]}")
+    else:
+        test_size = 0.25
+        print(f"Using default train/test split with test size {test_size}")
+        train_dataset, test_dataset = train_test_split(dataset, test_size=test_size, random_state=42)
+        print(f"Train dataset size: {train_dataset.shape[0]}")
+        print(f"Test dataset size: {test_dataset.shape[0]}")
 
-    train_features = train_dataset.drop(columns=["cpi", "branch_predictor", "l1d_stride_prefetch"])
+    train_features = pre_process_features(train_dataset)
+    test_features = pre_process_features(test_dataset)
+
+    prog_feature_columns = [col for col in train_features.columns if col.startswith("prog_") or col.startswith("cache_")]
+
+    # Standardize all features (program + config) with a shared StandardScaler
+    scaler = StandardScaler()
+    train_features = train_features.copy().astype(float)
+    test_features = test_features.copy().astype(float)
+    train_features[train_features.columns] = scaler.fit_transform(train_features[train_features.columns])
+    test_features[train_features.columns] = scaler.transform(test_features[train_features.columns])
+
+    train_prog_features = train_features[prog_feature_columns]
+    train_config_features = train_features.drop(columns=prog_feature_columns)
     train_labels = train_dataset["cpi"]
-    test_features = test_dataset.drop(columns=["cpi", "branch_predictor", "l1d_stride_prefetch"])
+    test_prog_features = test_features[prog_feature_columns]
+    test_config_features = test_features.drop(columns=prog_feature_columns)
     test_labels = test_dataset["cpi"]
 
-    # Standardize features
-    train_features = (train_features - train_features.mean()) / train_features.std()
-    test_features = (test_features - test_features.mean()) / test_features.std()
+    num_prog_features = len(train_prog_features.columns)
+    num_config_features = len(train_config_features.columns)
 
-    # Convert to float tensors and reshape labels to (n, 1) for MSELoss compatibility
-    train_features_t = torch.from_numpy(train_features.values).float()
-    train_labels_t = torch.from_numpy(train_labels.values).float().unsqueeze(1)
-    test_features_t = torch.from_numpy(test_features.values).float()
-    test_labels_t = torch.from_numpy(test_labels.values).float().unsqueeze(1)
+    # Convert to float tensors and reshape labels to (n, 1)
+    # Use copy=True to ensure the underlying NumPy buffer is writable (avoids PyTorch warning).
+    train_prog_features_t = torch.from_numpy(train_prog_features.to_numpy(copy=True)).float()
+    train_config_features_t = torch.from_numpy(train_config_features.to_numpy(copy=True)).float()
+    train_labels_t = torch.from_numpy(train_labels.to_numpy(copy=True)).float().unsqueeze(1)
+    test_prog_features_t = torch.from_numpy(test_prog_features.to_numpy(copy=True)).float()
+    test_config_features_t = torch.from_numpy(test_config_features.to_numpy(copy=True)).float()
+    test_labels_t = torch.from_numpy(test_labels.to_numpy(copy=True)).float().unsqueeze(1)
 
-    train_ds = TensorDataset(train_features_t, train_labels_t)
-    test_ds = TensorDataset(test_features_t, test_labels_t)
+    train_ds = TensorDataset(train_prog_features_t, train_config_features_t, train_labels_t)
+    test_ds = TensorDataset(test_prog_features_t, test_config_features_t, test_labels_t)
 
     train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
 
     device = "xla"
     epochs = 200
-    model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
+    # model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
+    model = PeregrineMLModel(
+        prog_size=num_prog_features,          # your analytical feature count
+        config_size=num_config_features,      # config parameter count
+        prog_embed_dim=128,
+        config_embed_dim=64,
+        interaction_dim=128,
+        hidden_dims=[256, 128, 64],
+        output_size=1,
+        dropout=0.1,
+    ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001) #, weight_decay=0.3)
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
     loss_fn = nn.L1Loss()
@@ -157,6 +236,10 @@ def main() -> None:
     checkpoint_path = os.path.join("checkpoints", f"{dataset_name}_checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
     xm.save(checkpoint, checkpoint_path)
+
+    # Persist preprocessing artifacts so inference can reproduce training transforms.
+    scaler_path = os.path.join("checkpoints", f"{dataset_name}_scaler.joblib")
+    joblib.dump(scaler, scaler_path)
 
     os.makedirs("training_metrics", exist_ok=True)
     metrics_path = os.path.join("training_metrics", f"{dataset_name}_metrics.json")
