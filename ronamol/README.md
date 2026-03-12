@@ -51,3 +51,9 @@ This joins each sweep row with:
 - `<traces_root>/<benchmark>/ronamol/cache_latency_summary.csv` (by cache sizes in the sweep row parameters)
 - `<traces_root>/<benchmark>/ronamol/trace_bp.json` (by branch predictor type in the sweep row parameters)
 
+### Build prediction CSV for ML Model inference tests
+
+Use this script to generate data points for the ML model to predict on to test the inference speed of the model over the design space.
+```bash
+python3 python/gen_prediction_sweep.py
+```
