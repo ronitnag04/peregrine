@@ -4,23 +4,7 @@ Object representation of x86 instructions.
 import numpy as np
 from evantrace.caches import Cache
 from evantrace.x86.branch_types import Branch_Type
-
-
-# Category → base execution latency (cycles). Defaults to 1 if not listed.
-_CATEGORY_LATENCIES: dict[str, int] = {
-    "IntMult": 3,
-    "IntDiv": 20,
-    "FloatAdd": 2,
-    "FloatCmp": 2,
-    "FloatCvt": 2,
-    "Bf16Cvt": 2,
-    "FloatMult": 4,
-    "FloatMultAcc": 5,
-    "FloatMisc": 3,
-    "FloatDiv": 12,
-    "FloatSqrt": 24,
-}
-
+from evantrace.x86.categories import opclass_latency
 
 class Instruction:
     def __init__(
@@ -29,6 +13,7 @@ class Instruction:
         assembly: str,
         category: str,
         opcode: str,
+        fu_group: str,
         inst_ptr: np.uint64,
         branch_type: Branch_Type | None,
         branch_taken: bool,
@@ -44,6 +29,7 @@ class Instruction:
         self.assembly: str = assembly
         self.category: str = category
         self.opcode: str = opcode
+        self.fu_group: str = fu_group
         self.inst_ptr: np.uint64 = inst_ptr
         self.branch_type: Branch_Type | None = branch_type
         self.branch_taken: bool = branch_taken
@@ -75,8 +61,7 @@ class Instruction:
         num_read_addrs = len(self.read_addrs)
         num_write_addrs = len(self.write_addrs)
 
-        # Base latency from category (or 1 if unknown).
-        op_lat = _CATEGORY_LATENCIES.get(self.category, 1)
+        op_lat = opclass_latency(self.category)
         exec_latency = op_lat
         if num_read_addrs > 0:
             exec_latency += max(dcache.read(addr) for addr in self.read_addrs)

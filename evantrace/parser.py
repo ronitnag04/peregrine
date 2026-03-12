@@ -8,6 +8,7 @@ from collections.abc import Iterator
 import numpy as np
 from evantrace.x86.branch_types import Branch_Type
 from evantrace.x86.instructions import Instruction
+from evantrace.x86.categories import opclass_to_fu_group
 
 class Parser:
     """
@@ -49,6 +50,7 @@ class Parser:
                     assembly=row['Assembly'],
                     category=row['Category'],
                     opcode=row['Opcode'].strip(),
+                    fu_group=opclass_to_fu_group(row['Category'].strip()),
                     branch_type=branch_type,
                     branch_taken=branch_taken,
                     branch_target_addr=branch_target_addr,

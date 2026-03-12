@@ -2,8 +2,7 @@
 Ronamol simple analytical model (fresh start).
 
 Computes a compact, bottleneck-aligned analytical feature vector from an
-evantrace CSV trace, plus (optionally) per-cache-config latency summaries and
-branch predictor misprediction rates (from sidecar files).
+evantrace CSV trace, plus (optionally) per-cache-config latency summaries.
 """
 
 from __future__ import annotations
@@ -96,18 +95,12 @@ class ProgramFeatures:
     frac_memory_ordering_hazards: float
     load_stride_regularity: float
 
-    # --- Branch predictor (sidecar) ---
-    mispred_rate_local: float
-    mispred_rate_tage: float
-    mispred_rate_delta: float
-
     def to_dict(self) -> Dict[str, Any]:
         return {k: getattr(self, k) for k in self.__dataclass_fields__.keys()}
 
 
 def compute_program_features(
     trace_csv: str | Path,
-    bp_json: str | Path | None = None,
     dep_window: int = 16,
     crit_threshold: int = 10,
     stride_min_samples: int = 16,
@@ -150,41 +143,29 @@ def compute_program_features(
     stride_stats_by_ip: dict[int, dict[int, int]] = {}
     load_samples_by_ip: dict[int, int] = {}
 
-    def _bucket_category(cat: str) -> str:
-        c = (cat or "").strip()
-        if c == "MemRead":
-            return "load"
-        if c == "MemWrite":
-            return "store"
-        if c in ("IntMult", "IntDiv"):
-            return "int_md"
-        if c.startswith("Float"):
-            if c in ("FloatMult", "FloatMultAcc", "FloatDiv", "FloatSqrt"):
-                return "fp_md"
-            return "fp_alu"
-        if c == "IntAlu":
-            return "int_alu"
-        return "other"
-
     for idx, inst in enumerate(parser.iter_instructions()):
         total += 1
         cur_bb += 1
 
-        bucket = _bucket_category(getattr(inst, "category", ""))
-        if bucket == "load":
+        bucket = inst.fu_group
+        if bucket == "read_port":
             n_load += 1
-        elif bucket == "store":
+        elif bucket == "rdwr_port":
             n_store += 1
-        elif bucket == "int_md":
+        elif bucket == "int_mult_div":
             n_int_md += 1
         elif bucket == "fp_alu":
             n_fp_alu += 1
-        elif bucket == "fp_md":
+        elif bucket == "fp_mult_div":
             n_fp_md += 1
         elif bucket == "int_alu":
             n_int_alu += 1
-        else:
+        elif bucket == "simd_unit":
+            n_simd += 1
+        elif bucket == "other":
             n_other += 1
+        else:
+            raise ValueError(f"Unknown FU group: {bucket}")
 
         if inst.inst_sync:
             n_sync += 1
@@ -269,18 +250,6 @@ def compute_program_features(
         stride_reg_scores.append(best / total_deltas)
     load_stride_regularity = float(np.mean(stride_reg_scores)) if stride_reg_scores else 0.0
 
-    # BP sidecar
-    mispred_local = 0.0
-    mispred_tage = 0.0
-    if bp_json is None:
-        bp_path = _find_sidecar(trace_csv, ["trace_bp.json", "_bp.json"])
-    else:
-        bp_path = Path(bp_json)
-    if bp_path and bp_path.exists():
-        data = json.loads(bp_path.read_text())
-        mispred_local = float(data.get("local", 0.0))
-        mispred_tage = float(data.get("tage", 0.0))
-
     bb_arr = np.asarray(bb_sizes, dtype=np.int32)
     dep_arr = np.asarray(reg_dep_dists, dtype=np.int32)
 
@@ -325,9 +294,6 @@ def compute_program_features(
         frac_mem_dependent=_safe_div(mem_dep_ops, mem_ops),
         frac_memory_ordering_hazards=_safe_div(mem_order_hazard_ops, mem_ops),
         load_stride_regularity=float(load_stride_regularity),
-        mispred_rate_local=mispred_local,
-        mispred_rate_tage=mispred_tage,
-        mispred_rate_delta=float(mispred_local - mispred_tage),
     )
 
 

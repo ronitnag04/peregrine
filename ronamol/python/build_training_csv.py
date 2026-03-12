@@ -144,10 +144,7 @@ def main() -> None:
     # Drop branch_predictor from output; we replace it with a numeric misprediction_rate.
     sweep_cols = [c for c in first_row.keys() if c != "branch_predictor"]
 
-    # Drop misprediction-related fields from program_features; they will be recomputed
-    # per-config from trace_bp.json instead.
-    prog_exclude = {"mispred_rate_local", "mispred_rate_tage", "mispred_rate_delta"}
-    prog_keys = [k for k in sorted(prog0.keys()) if k not in prog_exclude]
+    prog_keys = sorted(prog0.keys())
     prog_cols = [f"{args.program_prefix}{k}" for k in prog_keys]
     cache_cols = [
         f"{args.cache_prefix}{k}"

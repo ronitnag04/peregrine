@@ -48,7 +48,6 @@ def main() -> None:
         default=None,
         help="Output directory (default: <trace_dir>/ronamol/)",
     )
-    ap.add_argument("--bp-json", default=None, help="Optional path to BP JSON sidecar")
     ap.add_argument("--latencies-npy", default=None, help="Optional path to *_latencies.npy")
     ap.add_argument("--configs-json", default=None, help="Optional path to *_configs.json")
     ap.add_argument(
@@ -67,7 +66,7 @@ def main() -> None:
     trace_csv = Path(args.trace_csv)
     out_dir = Path(args.out_dir) if args.out_dir is not None else (trace_csv.parent / "ronamol")
 
-    prog = compute_program_features(trace_csv, bp_json=args.bp_json)
+    prog = compute_program_features(trace_csv)
     _write_json(out_dir / "program_features.json", prog.to_dict())
 
     if not args.no_cache_lat_summary:
