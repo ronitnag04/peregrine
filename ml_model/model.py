@@ -26,11 +26,11 @@ class PeregrineMLModel(nn.Module):
         self,
         prog_size: int,
         config_size: int,
-        prog_embed_dim: int,
-        config_embed_dim: int,
-        interaction_dim: int,
-        hidden_dims: Iterable[int],
-        output_size: int,
+        prog_embed_dim: int = 128,
+        config_embed_dim: int = 64,
+        interaction_dim: int = 128,
+        hidden_dims: Iterable[int] = [256, 128, 64],
+        output_size: int = 1,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()

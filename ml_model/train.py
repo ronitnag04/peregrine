@@ -180,14 +180,8 @@ def main() -> None:
     epochs = 200
     # model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
     model = PeregrineMLModel(
-        prog_size=num_prog_features,          # your analytical feature count
-        config_size=num_config_features,      # config parameter count
-        prog_embed_dim=128,
-        config_embed_dim=64,
-        interaction_dim=128,
-        hidden_dims=[256, 128, 64],
-        output_size=1,
-        dropout=0.1,
+        prog_size=num_prog_features,
+        config_size=num_config_features,
     ).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001) #, weight_decay=0.3)
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
