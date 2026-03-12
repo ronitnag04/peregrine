@@ -125,7 +125,7 @@ def _collect_feature_vectors(traces_dir: Path) -> Tuple[List[str], np.ndarray]:
 
 def compute_pairwise_distance_matrix(traces_dir: str) -> np.ndarray:
     """
-    Compute the 8×8 pairwise Euclidean distance matrix of analytical feature vectors.
+    Compute the pairwise Euclidean distance matrix of analytical feature vectors.
 
     Each per-benchmark feature vector is first L2-normalized (unit length).
 
@@ -138,18 +138,19 @@ def compute_pairwise_distance_matrix(traces_dir: str) -> np.ndarray:
     Returns
     -------
     distances : np.ndarray
-        2D array of shape (8, 8) with distances between traces.
+        2D array of shape (N, N) with distances between benchmarks found under
+        `traces_dir`.
     """
     benchmark_names, features = _collect_feature_vectors(Path(traces_dir))
 
     n_benchmarks = features.shape[0]
-    if n_benchmarks != 8:
+    if n_benchmarks < 2:
         raise ValueError(
-            f"Expected exactly 8 benchmarks to form an 8×8 matrix, found {n_benchmarks} "
+            f"Need at least 2 benchmarks for a distance matrix, found {n_benchmarks} "
             f"in {traces_dir}: {benchmark_names}"
         )
 
-    # features has shape (8, d). Use broadcasting to get all pairwise distances.
+    # features has shape (N, d). Use broadcasting to get all pairwise distances.
     diffs = features[:, None, :] - features[None, :, :]
     distances = np.linalg.norm(diffs, axis=2)
     return distances
@@ -198,13 +199,22 @@ def _compute_regression_r2(
     benchmark_names: List[str],
     features: np.ndarray,
     sweep_results_path: Path,
-) -> Tuple[float, float, int]:
+) -> Tuple[float, float, int, float, float, float]:
     """
     Compute R^2 for:
       1) CPI ~ analytical feature vectors (from program_features.json)
       2) CPI ~ microarchitectural configuration values (from sweep_results.csv)
 
     Only rows whose benchmark appears in `benchmark_names` are used.
+
+    Also compute a simple variance decomposition of CPI over the included sweep rows:
+    - total variance (SS_tot)
+    - between-benchmark variance (SS_between), using per-benchmark mean CPI
+    - within-benchmark variance (SS_within = SS_tot - SS_between)
+
+    The between-benchmark fraction SS_between / SS_tot is an upper bound on how much
+    CPI variation can be explained by any benchmark-constant signal (including the
+    analytical feature vectors used here).
     """
     bench_to_idx = {name: i for i, name in enumerate(benchmark_names)}
 
@@ -226,6 +236,7 @@ def _compute_regression_r2(
         ]
 
         y_vals: List[float] = []
+        bench_labels: List[str] = []
         X_feat_rows: List[np.ndarray] = []
         X_cfg_rows: List[List[float]] = []
 
@@ -264,6 +275,7 @@ def _compute_regression_r2(
                 continue
 
             y_vals.append(cpi_val)
+            bench_labels.append(bench)
             X_feat_rows.append(feat_vec)
             X_cfg_rows.append(cfg_vals)
 
@@ -279,7 +291,23 @@ def _compute_regression_r2(
 
     r2_analytical = _linear_regression_r2(X_feat, y)
     r2_config = _linear_regression_r2(X_cfg, y)
-    return r2_analytical, r2_config, y.shape[0]
+
+    # Variance decomposition across sweep rows.
+    y_mean = float(np.mean(y))
+    ss_tot = float(np.sum((y - y_mean) ** 2))
+    ss_between = 0.0
+    if ss_tot > 0.0:
+        # Compute per-benchmark mean CPI, weighted by rows per benchmark.
+        by_bench: Dict[str, List[float]] = {}
+        for b, v in zip(bench_labels, y_vals):
+            by_bench.setdefault(b, []).append(v)
+        for vals in by_bench.values():
+            n_b = float(len(vals))
+            mu_b = float(np.mean(vals))
+            ss_between += n_b * (mu_b - y_mean) ** 2
+    ss_within = ss_tot - ss_between
+
+    return r2_analytical, r2_config, y.shape[0], ss_tot, ss_between, ss_within
 
 
 def _compute_param_response_curves(
@@ -492,9 +520,36 @@ def _plot_regression_r2(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Compute the 8×8 pairwise distance matrix of analytical feature "
-            "vectors read from each benchmark's ronamol/program_features.json."
+            "Analyze RonAMoL per-benchmark features and (optionally) sweep results.\n"
+            "\n"
+            "Always computed:\n"
+            "  - Pairwise Euclidean distance matrix between benchmarks using the\n"
+            "    L2-normalized analytical feature vectors in:\n"
+            "      <benchmark>/ronamol/program_features.json\n"
+            "    Outputs:\n"
+            "      * feature_distance_matrix.csv\n"
+            "      * feature_distance_matrix.png\n"
+            "      * benchmarks.txt (row/col order for matrices)\n"
+            "\n"
+            "When --ofat-sweep-results is provided (sweep_results.csv):\n"
+            "  - Linear regression R² (does NOT require OFAT):\n"
+            "      * CPI ~ analytical features\n"
+            "      * CPI ~ microarchitectural configuration values\n"
+            "    Outputs:\n"
+            "      * regression_summary.txt\n"
+            "      * regression_r2_comparison.png\n"
+            "  - Per-parameter CPI response-distance matrices (requires OFAT-style rows):\n"
+            "      * Build a CPI-vs-parameter curve per benchmark from rows where all\n"
+            "        other parameters are held constant\n"
+            "      * Align curves on shared parameter values\n"
+            "      * Compute pairwise L2 distances between curves\n"
+            "    Outputs (for each swept parameter <param>):\n"
+            "      * response_distance_<param>.csv\n"
+            "      * response_distance_<param>.png\n"
+            "\n"
+            "All outputs are written under --analysis-output-dir."
         )
     )
     parser.add_argument(
@@ -503,20 +558,30 @@ def main() -> None:
         type=str,
         required=True,
         help=(
-            "Traces directory containing benchmark subdirectories. Each benchmark should "
-            "contain ronamol/program_features.json (exactly 8 benchmarks total)."
+            "Directory containing benchmark subdirectories. Each benchmark directory must "
+            "contain ronamol/program_features.json. The analysis runs on all benchmarks "
+            "found (N >= 2), unless excluded via --drop-benchmark."
         ),
     )
     parser.add_argument(
         "-s",
+        "--ofat-sweep-results",
         "--sweep-results",
         type=str,
         default=None,
+        dest="ofat_sweep_results",
         help=(
-            "Optional path to sweep_results.csv. When provided, runs linear "
-            "regressions of CPI vs analytical features and CPI vs config values "
-            "and prints their R^2 values, and computes per-parameter CPI "
-            "response-distance matrices."
+            "Optional path to sweep_results.csv.\n"
+            "\n"
+            "Enables:\n"
+            "  - Linear regression R²:\n"
+            "      * CPI ~ analytical features (from program_features.json)\n"
+            "      * CPI ~ configuration values (CSV columns other than benchmark/cpi)\n"
+            "  - Per-parameter CPI response-distance matrices (CSV + heatmap PNG)\n"
+            "      (requires OFAT-style rows: one varying parameter, others held constant)\n"
+            "\n"
+            "Preferred flag name: --ofat-sweep-results\n"
+            "Compatibility alias: --sweep-results"
         ),
     )
     parser.add_argument(
@@ -525,8 +590,20 @@ def main() -> None:
         type=str,
         default="analysis_outputs",
         help=(
-            "Directory to write analysis outputs (distance matrices, regression "
-            "summary, etc.). Default: analysis_outputs"
+            "Output directory for generated artifacts.\n"
+            "\n"
+            "Always written:\n"
+            "  - benchmarks.txt (row/col order)\n"
+            "  - feature_distance_matrix.csv\n"
+            "  - feature_distance_matrix.png\n"
+            "\n"
+            "When --ofat-sweep-results is provided:\n"
+            "  - regression_summary.txt\n"
+            "  - regression_r2_comparison.png\n"
+            "  - response_distance_<param>.csv\n"
+            "  - response_distance_<param>.png\n"
+            "\n"
+            "Default: analysis_outputs"
         ),
     )
     parser.add_argument(
@@ -534,7 +611,7 @@ def main() -> None:
         action="append",
         default=[],
         help=(
-            "Benchmark name to exclude from the analysis. "
+            "Benchmark directory name to exclude from all analyses and outputs. "
             "May be specified multiple times."
         ),
     )
@@ -587,44 +664,47 @@ def main() -> None:
         output_path=feature_dist_plot,
     )
 
-    print("Benchmark order (rows/cols):")
-    for i, name in enumerate(benchmark_names):
-        print(f"  {i}: {name}")
+    print("Completed: analytical feature distance matrix")
+    print(f"  Saved benchmark order to:        {benchmarks_path}")
+    print(f"  Saved distance matrix CSV to:    {feature_dist_path}")
+    print(f"  Saved distance matrix heatmap to:{feature_dist_plot}")
 
-    print(f"\n{distances.shape[0]}×{distances.shape[1]} pairwise Euclidean distance matrix:")
-    np.set_printoptions(precision=6, suppress=True)
-    print(distances)
-    print(f"\nSaved feature distance matrix to {feature_dist_path}")
-    print(f"Saved benchmark order to {benchmarks_path}")
-    print(f"Saved feature distance heatmap to {feature_dist_plot}")
-
-    if args.sweep_results:
-        sweep_path = Path(args.sweep_results)
-        r2_analytical, r2_config, n_samples = _compute_regression_r2(
-            benchmark_names, features, sweep_path
-        )
-        print(
-            f"\nLinear regression on CPI using {n_samples} sweep_samples "
-            f"(benchmarks: {benchmark_names}):"
-        )
-        print(f"  R^2 (analytical features vs CPI): {r2_analytical:.6f}")
-        print(f"  R^2 (config values vs CPI):      {r2_config:.6f}")
+    if args.ofat_sweep_results:
+        sweep_path = Path(args.ofat_sweep_results)
+        (
+            r2_analytical,
+            r2_config,
+            n_samples,
+            ss_tot,
+            ss_between,
+            ss_within,
+        ) = _compute_regression_r2(benchmark_names, features, sweep_path)
 
         # Save regression summary.
         reg_summary_path = analysis_dir / "regression_summary.txt"
+        between_frac = (ss_between / ss_tot) if ss_tot > 0.0 else float("nan")
+        within_frac = (ss_within / ss_tot) if ss_tot > 0.0 else float("nan")
         with open(reg_summary_path, "w", encoding="utf-8") as f:
             f.write(
                 f"Samples used: {n_samples}\n"
                 f"Benchmarks: {', '.join(benchmark_names)}\n"
                 f"R^2 (analytical features vs CPI): {r2_analytical:.6f}\n"
                 f"R^2 (config values vs CPI):      {r2_config:.6f}\n"
+                "\n"
+                "CPI variance decomposition over included sweep rows:\n"
+                f"SS_tot:     {ss_tot:.6g}\n"
+                f"SS_between: {ss_between:.6g}  (between-benchmark)\n"
+                f"SS_within:  {ss_within:.6g}  (within-benchmark / config-to-config)\n"
+                f"Frac_between (SS_between/SS_tot): {between_frac:.6f}\n"
+                f"Frac_within  (SS_within/SS_tot):  {within_frac:.6f}\n"
             )
-        print(f"Saved regression summary to {reg_summary_path}")
 
         # Plot regression R^2 comparison.
         reg_plot_path = analysis_dir / "regression_r2_comparison.png"
         _plot_regression_r2(r2_analytical, r2_config, reg_plot_path)
-        print(f"Saved regression R² comparison plot to {reg_plot_path}")
+        print("\nCompleted: CPI regression R² analyses")
+        print(f"  Saved regression summary to:     {reg_summary_path}")
+        print(f"  Saved R² comparison plot to:     {reg_plot_path}")
 
         # Per-parameter CPI response-distance matrices.
         param_response = _compute_param_response_curves(benchmark_names, sweep_path)
@@ -634,20 +714,15 @@ def main() -> None:
             cleaned = re.sub(r"[^0-9A-Za-z]+", "_", name).strip("_")
             return cleaned or "param"
 
-        for param, dist in sorted(param_dists.items()):
-            print(f"\nParameter: {param}")
-            print("  Benchmark order (rows/cols):")
-            for i, name in enumerate(benchmark_names):
-                print(f"    {i}: {name}")
-            print("  CPI response distance matrix:")
-            np.set_printoptions(precision=6, suppress=True)
-            print(dist)
+        if param_dists:
+            print("\nCompleted: per-parameter CPI response-distance matrices")
+            print(f"  Benchmark order for matrices:   {benchmarks_path}")
 
+        for param, dist in sorted(param_dists.items()):
             # Save per-parameter response distance matrix.
             sanitized = _sanitize_param_name(param)
             param_path = analysis_dir / f"response_distance_{sanitized}.csv"
             np.savetxt(param_path, dist, delimiter=",", fmt="%.10g")
-            print(f"  Saved response distance matrix for {param} to {param_path}")
 
             # Plot per-parameter response distance matrix.
             param_plot = analysis_dir / f"response_distance_{sanitized}.png"
@@ -657,7 +732,9 @@ def main() -> None:
                 title=f"CPI response distance matrix ({param})",
                 output_path=param_plot,
             )
-            print(f"  Saved response distance heatmap for {param} to {param_plot}")
+            print(f"  {param}")
+            print(f"    Saved CSV to:                 {param_path}")
+            print(f"    Saved heatmap to:             {param_plot}")
 
 
 if __name__ == "__main__":

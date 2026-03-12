@@ -65,9 +65,11 @@ def main() -> None:
 
     trace_csv = Path(args.trace_csv)
     out_dir = Path(args.out_dir) if args.out_dir is not None else (trace_csv.parent / "ronamol")
+    print(f"Generating features for trace: {trace_csv}")
 
     prog = compute_program_features(trace_csv)
     _write_json(out_dir / "program_features.json", prog.to_dict())
+    print(f" - Wrote program_features.json to {out_dir / 'program_features.json'}")
 
     if not args.no_cache_lat_summary:
         rows = summarize_cache_latencies(
@@ -77,8 +79,12 @@ def main() -> None:
         )
         if args.cache_lat_format == "json":
             _write_json(out_dir / "cache_latency_summary.json", rows)
+            print(f" - Wrote cache_latency_summary.json to {out_dir / 'cache_latency_summary.json'}")
         else:
             _write_csv(out_dir / "cache_latency_summary.csv", rows)
+            print(f" - Wrote cache_latency_summary.csv to {out_dir / 'cache_latency_summary.csv'}")
+        
+    print(f" - Finished generating features for trace: {trace_csv}")
 
 
 if __name__ == "__main__":
