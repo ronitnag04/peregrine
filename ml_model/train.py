@@ -25,12 +25,11 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
 def train_epoch(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, optimizer: optim.Optimizer, device: str) -> float:
     model.train()
     total_loss = 0.0
-    for prog_inputs, config_inputs, targets in loader:
-        prog_inputs = prog_inputs.to(device)
-        config_inputs = config_inputs.to(device)
+    for inputs, targets in loader:
+        inputs = inputs.to(device)
         targets = targets.to(device)
         optimizer.zero_grad()
-        outputs = model(prog_inputs, config_inputs)
+        outputs = model(inputs)
         loss = loss_fn(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -45,11 +44,10 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     total_percent_error = 0.0
     num_batches = 0
     with torch.no_grad():
-        for prog_inputs, config_inputs, targets in loader:
-            prog_inputs = prog_inputs.to(device)
-            config_inputs = config_inputs.to(device)
+        for inputs, targets in loader:
+            inputs = inputs.to(device)
             targets = targets.to(device)
-            outputs = model(prog_inputs, config_inputs)
+            outputs = model(inputs)
             loss = criterion(outputs, targets)
             torch_xla.sync()
             total_loss += loss.detach().to("cpu")
@@ -123,7 +121,6 @@ def main() -> None:
             after = len(dataset)
             print(f"Dropped benchmarks {drop_list}: {before - after} rows removed, {after} remaining.")
 
-    # dataset = dataset.sample(frac=0.5)
     print(f'Dataset size: {dataset.shape[0]}')
 
     if args.test_benchmarks:
@@ -142,8 +139,6 @@ def main() -> None:
     train_features = pre_process_features(train_dataset)
     test_features = pre_process_features(test_dataset)
 
-    prog_feature_columns = [col for col in train_features.columns if col.startswith("prog_") or col.startswith("cache_")]
-
     # Standardize all features (program + config) with a shared StandardScaler
     scaler = StandardScaler()
     train_features = train_features.copy().astype(float)
@@ -151,38 +146,23 @@ def main() -> None:
     train_features[train_features.columns] = scaler.fit_transform(train_features[train_features.columns])
     test_features[train_features.columns] = scaler.transform(test_features[train_features.columns])
 
-    train_prog_features = train_features[prog_feature_columns]
-    train_config_features = train_features.drop(columns=prog_feature_columns)
     train_labels = train_dataset["cpi"]
-    test_prog_features = test_features[prog_feature_columns]
-    test_config_features = test_features.drop(columns=prog_feature_columns)
     test_labels = test_dataset["cpi"]
 
-    num_prog_features = len(train_prog_features.columns)
-    num_config_features = len(train_config_features.columns)
-
-    # Convert to float tensors and reshape labels to (n, 1)
-    # Use copy=True to ensure the underlying NumPy buffer is writable (avoids PyTorch warning).
-    train_prog_features_t = torch.from_numpy(train_prog_features.to_numpy(copy=True)).float()
-    train_config_features_t = torch.from_numpy(train_config_features.to_numpy(copy=True)).float()
+    train_features_t = torch.from_numpy(train_features.to_numpy(copy=True)).float()
     train_labels_t = torch.from_numpy(train_labels.to_numpy(copy=True)).float().unsqueeze(1)
-    test_prog_features_t = torch.from_numpy(test_prog_features.to_numpy(copy=True)).float()
-    test_config_features_t = torch.from_numpy(test_config_features.to_numpy(copy=True)).float()
+    test_features_t = torch.from_numpy(test_features.to_numpy(copy=True)).float()
     test_labels_t = torch.from_numpy(test_labels.to_numpy(copy=True)).float().unsqueeze(1)
 
-    train_ds = TensorDataset(train_prog_features_t, train_config_features_t, train_labels_t)
-    test_ds = TensorDataset(test_prog_features_t, test_config_features_t, test_labels_t)
+    train_ds = TensorDataset(train_features_t, train_labels_t)
+    test_ds = TensorDataset(test_features_t, test_labels_t)
 
     train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
 
     device = "xla"
     epochs = 200
-    # model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
-    model = PeregrineMLModel(
-        prog_size=num_prog_features,
-        config_size=num_config_features,
-    ).to(device)
+    model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001) #, weight_decay=0.3)
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
     loss_fn = nn.L1Loss()
