@@ -19,5 +19,13 @@ class BPSim:
 
     def run(self):
         for instruction in self.trace:
-            predicted_taken = self.branch_predictor.predict(instruction.inst_ptr, instruction.branch_type)  
-            self.branch_predictor.update(instruction.inst_ptr, instruction.branch_type, predicted_taken, instruction.branch_taken)
+            if instruction.branch_type is None:
+                continue  # skip non-branches
+
+            predicted_taken = self.branch_predictor.predict(instruction.inst_ptr, instruction.branch_type)
+            self.branch_predictor.update(
+                instruction.inst_ptr,
+                instruction.branch_type,
+                predicted_taken,
+                instruction.branch_taken,
+            )

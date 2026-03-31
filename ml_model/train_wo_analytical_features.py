@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -140,10 +141,11 @@ def main() -> None:
     test_features = test_features.astype(float)
 
     # Convert to float tensors and reshape labels to (n, 1) for MSELoss compatibility
-    train_features_t = torch.from_numpy(train_features.values).float()
-    train_labels_t = torch.from_numpy(train_labels.values).float().unsqueeze(1)
-    test_features_t = torch.from_numpy(test_features.values).float()
-    test_labels_t = torch.from_numpy(test_labels.values).float().unsqueeze(1)
+    # Use copy=True to ensure the underlying NumPy buffer is writable (avoids PyTorch warning).
+    train_features_t = torch.from_numpy(train_features.to_numpy(copy=True)).float()
+    train_labels_t = torch.from_numpy(train_labels.to_numpy(copy=True)).float().unsqueeze(1)
+    test_features_t = torch.from_numpy(test_features.to_numpy(copy=True)).float()
+    test_labels_t = torch.from_numpy(test_labels.to_numpy(copy=True)).float().unsqueeze(1)
 
     train_ds = TensorDataset(train_features_t, train_labels_t)
     test_ds = TensorDataset(test_features_t, test_labels_t)
@@ -201,6 +203,10 @@ def main() -> None:
     checkpoint_path = os.path.join("checkpoints", f"{dataset_name}_checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
     xm.save(checkpoint, checkpoint_path)
+
+    # Persist preprocessing artifacts so inference can reproduce training transforms.
+    scaler_path = os.path.join("checkpoints", f"{dataset_name}_scaler.joblib")
+    joblib.dump(scaler, scaler_path)
 
     os.makedirs("training_metrics", exist_ok=True)
     metrics_path = os.path.join("training_metrics", f"{dataset_name}_metrics.json")

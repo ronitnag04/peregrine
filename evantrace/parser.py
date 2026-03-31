@@ -6,10 +6,9 @@ import csv
 from collections.abc import Iterator
 
 import numpy as np
-from evantrace.x86.opcodes import Opcode
-from evantrace.x86.registers import Register
 from evantrace.x86.branch_types import Branch_Type
 from evantrace.x86.instructions import Instruction
+from evantrace.x86.categories import opclass_to_fu_group
 
 class Parser:
     """
@@ -35,26 +34,24 @@ class Parser:
         """
         with open(self.filepath, mode='r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            
-            for i, row in enumerate(reader):
-                opcode = self._parse_opcode(row['Opcode'])
-                if opcode is None:
-                    raise ValueError(f"Unknown opcode: {row['Opcode']}")
 
+            for i, row in enumerate(reader):
                 branch_type = self._parse_branch_type(row['Branch Type'])
                 if branch_type is None:
                     branch_taken = False
                     branch_target_addr = 0
                 else:
                     branch_taken = self._parse_bool(row['Branch Taken'])
-                    branch_target_addr = np.uint64(int(row['Branch Target Address'], 16))
+                    # TODO: We don't track branch target address in gem5 tracer yet
+                    branch_target_addr = 0 # np.uint64(int(row['Branch Target Address'], 16)) 
 
                 yield Instruction(
                     inst_ptr=np.uint64(int(row['IP'], 16)),
                     assembly=row['Assembly'],
                     category=row['Category'],
-                    opcode=opcode,
-                    branch_type=self._parse_branch_type(row['Branch Type']),
+                    opcode=row['Opcode'].strip(),
+                    fu_group=opclass_to_fu_group(row['Category'].strip()),
+                    branch_type=branch_type,
                     branch_taken=branch_taken,
                     branch_target_addr=branch_target_addr,
                     inst_sync=self._parse_bool(row['Instruction Sync']),
@@ -95,23 +92,15 @@ class Parser:
             return None
         return Branch_Type[s.strip()]
 
-    def _parse_opcode(self, s: str) -> Opcode | None:
-        """Converts opcode string to Opcode enum."""
-        return Opcode[s.strip()]
+    def _parse_register_list(self, s: str) -> list[str]:
+        """
+        Parses a semicolon-delimited list of register names.
+        The new trace format stores registers as plain strings; we keep them as-is.
+        """
+        if not s or not s.strip():
+            return []
 
-    def _parse_register_list(self, s: str) -> list[Register]:
-        """Parses a semicolon-delimited list of register names."""
-        registers: list[Register] = []
-        if not s.strip():
-            return registers
-        
-        reg_names = s.split(';')
-        for name in reg_names:
-            name = name.strip()
-            reg = Register[name]
-            registers.append(reg)
-    
-        return registers
+        return [name.strip() for name in s.split(';') if name.strip()]
 
     @staticmethod
     def _parse_addr_list(s: str) -> list[np.uint64]:
