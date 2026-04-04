@@ -3,3 +3,4 @@ plots/
 checkpoints/
 training_data/
 PostSPMDPassesExecutionDuration.txt
+sweep_results/
