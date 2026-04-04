@@ -111,6 +111,12 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of benchmarks to drop entirely from training and testing",
         default="",
     )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Output directory for checkpoint and metrics files",
+        default=".",
+    )
 
     args = parser.parse_args()
 
@@ -124,6 +130,9 @@ def main() -> None:
     args = parse_args()
     dataset_name = os.path.basename(args.dataset_path).split('.')[0]
     dataset = load_dataset(args.dataset_path)
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # Optionally drop benchmarks considered outliers from the dataset entirely.
     if args.drop_benchmarks:
@@ -219,17 +228,19 @@ def main() -> None:
     print('------------ End Training ---------------')
     total_duration = time.perf_counter() - total_start
 
-    os.makedirs("checkpoints", exist_ok=True)
-    checkpoint_path = os.path.join("checkpoints", f"{dataset_name}_checkpoint.pt")
+    checkpoints_dir = os.path.join(args.output_dir, "checkpoints")
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoints_dir, f"{dataset_name}_checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
     xm.save(checkpoint, checkpoint_path)
 
     # Persist preprocessing artifacts so inference can reproduce training transforms.
-    scaler_path = os.path.join("checkpoints", f"{dataset_name}_scaler.joblib")
+    scaler_path = os.path.join(checkpoints_dir, f"{dataset_name}_scaler.joblib")
     joblib.dump(scaler, scaler_path)
 
-    os.makedirs("training_metrics", exist_ok=True)
-    metrics_path = os.path.join("training_metrics", f"{dataset_name}_metrics.json")
+    training_metrics_dir = os.path.join(args.output_dir, "training_metrics")
+    os.makedirs(training_metrics_dir, exist_ok=True)
+    metrics_path = os.path.join(training_metrics_dir, f"{dataset_name}_metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(
             {
