@@ -95,6 +95,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
+        "-t",
+        "--test-size",
+        type=float,
+        help="Fraction of the dataset to use for testing",
+        default=0.25,
+    )
+    parser.add_argument(
         "--test-benchmarks",
         help="Comma-separated list of benchmarks to use for testing",
         default="",
@@ -104,7 +111,13 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of benchmarks to drop entirely from training and testing",
         default="",
     )
-    return parser.parse_args()
+
+    args = parser.parse_args()
+
+    if args.test_size is not None and args.test_benchmarks:
+        parser.error("Cannot specify both test_size and test_benchmarks")
+
+    return args
 
 
 def main() -> None:
@@ -130,7 +143,7 @@ def main() -> None:
         print(f"Train dataset size: {train_dataset.shape[0]}")
         print(f"Test dataset size: {test_dataset.shape[0]}")
     else:
-        test_size = 0.25
+        test_size = args.test_size
         print(f"Using default train/test split with test size {test_size}")
         train_dataset, test_dataset = train_test_split(dataset, test_size=test_size, random_state=42)
         print(f"Train dataset size: {train_dataset.shape[0]}")
