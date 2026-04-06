@@ -1,18 +1,17 @@
 #!/bin/bash
 
-# Sweep script for different train-test split sizes
-# Calls train.py with different test-size values
+# Sweep script for different out-of-distribution benchmakrs
+# Calls train.py with different different benchmarks used for testing (and unseen in training)
 
 set -euo pipefail
 
 DATASET_PATH="training_data/ronamol_spec_training_data.csv"
 PYTHON_SCRIPT="train.py"
 
-# Array of test sizes to sweep over (as fractions)
-TEST_SIZES=(0.1 0.15 0.2 0.25 0.3 0.35 0.4)
+BENCHMARKS=("505.mcf_r" "520.omnetpp_r" "523.xalancbmk_r" "541.leela_r" "548.exchange2_r" "531.deepsjeng_r" "557.xz_r" "525.x264_r" "502.gcc_r") # "500.perlbench_r"
 
-echo "Starting train-test split sweep with dataset: $DATASET_PATH"
-echo "Test sizes to sweep: ${TEST_SIZES[*]}"
+echo "Starting out-of-distribution benchmark sweep with dataset: $DATASET_PATH"
+echo "Out-of-distribution benchmarks to sweep: ${BENCHMARKS[*]}"
 echo "=========================================="
 
 # Create results directory
@@ -25,20 +24,20 @@ mkdir -p "$SWEEP_DIR"
 SWEEP_LOG="$SWEEP_DIR/sweep_log.txt"
 echo "Sweep started at $(date)" > "$SWEEP_LOG"
 echo "Dataset: $DATASET_PATH" >> "$SWEEP_LOG"
-echo "Test sizes: ${TEST_SIZES[*]}" >> "$SWEEP_LOG"
+echo "Out-of-distribution benchmarks: ${BENCHMARKS[*]}" >> "$SWEEP_LOG"
 echo "========================================" >> "$SWEEP_LOG"
 
-for test_size in "${TEST_SIZES[@]}"; do
+for benchmark in "${BENCHMARKS[@]}"; do
     echo ""
-    echo "Running training with test size: $test_size"
+    echo "Running training with out-of-distribution benchmark: $benchmark"
     echo "Time: $(date)"
     
     # Log to sweep log
     echo "" >> "$SWEEP_LOG"
-    echo "Test size: $test_size - Started at $(date)" >> "$SWEEP_LOG"
+    echo "Out-of-distribution benchmark: $benchmark - Started at $(date)" >> "$SWEEP_LOG"
     
     # Create subdirectory for this run; train.py writes checkpoint, scaler, and metrics here
-    RUN_DIR="$SWEEP_DIR/test_size_${test_size}"
+    RUN_DIR="$SWEEP_DIR/ood_benchmark_${benchmark}"
     mkdir -p "$RUN_DIR"
     OUTPUT_DIR="$RUN_DIR"
     CHECKPOINT_PATH="$OUTPUT_DIR/checkpoint.pt"
@@ -46,12 +45,12 @@ for test_size in "${TEST_SIZES[@]}"; do
     METRICS_PATH="$OUTPUT_DIR/metrics.json"
 
     # Run training and capture output
-    if python "$PYTHON_SCRIPT" -d "$DATASET_PATH" --test-size "$test_size" --output-dir "$OUTPUT_DIR" > "$RUN_DIR/training_output.txt" 2>&1; then
-        echo "✓ Training completed successfully for test size $test_size"
-        echo "Test size: $test_size - COMPLETED at $(date)" >> "$SWEEP_LOG"
+    if python "$PYTHON_SCRIPT" -d "$DATASET_PATH" --test-benchmarks "$benchmark" --output-dir "$OUTPUT_DIR" > "$RUN_DIR/training_output.txt" 2>&1; then
+        echo "✓ Training completed successfully for out-of-distribution benchmark: $benchmark"
+        echo "Out-of-distribution benchmark: $benchmark - COMPLETED at $(date)" >> "$SWEEP_LOG"
     else
-        echo "✗ Training failed for test size $test_size"
-        echo "Test size: $test_size - FAILED at $(date)" >> "$SWEEP_LOG"
+        echo "✗ Training failed for out-of-distribution benchmark: $benchmark"
+        echo "Out-of-distribution benchmark: $benchmark - FAILED at $(date)" >> "$SWEEP_LOG"
     fi
 done
 
@@ -63,19 +62,19 @@ echo "Sweep completed at $(date)" >> "$SWEEP_LOG"
 
 # Create a summary of results
 SUMMARY_FILE="$SWEEP_DIR/summary.txt"
-echo "Train-Test Split Sweep Summary" > "$SUMMARY_FILE"
+echo "Out-of-distribution benchmark Sweep Summary" > "$SUMMARY_FILE"
 echo "Generated at: $(date)" >> "$SUMMARY_FILE"
 echo "Dataset: $DATASET_PATH" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
 
-for test_size in "${TEST_SIZES[@]}"; do
-    RUN_DIR="$SWEEP_DIR/test_size_${test_size}"
+for benchmark in "${BENCHMARKS[@]}"; do
+    RUN_DIR="$SWEEP_DIR/ood_benchmark_${benchmark}"
     OUTPUT_DIR="$RUN_DIR"
     CHECKPOINT_PATH="$OUTPUT_DIR/checkpoint.pt"
     SCALER_PATH="$OUTPUT_DIR/scaler.joblib"
     METRICS_PATH="$OUTPUT_DIR/metrics.json"
     if [ -f "$RUN_DIR/training_output.txt" ]; then
-        echo "Test Size: $test_size" >> "$SUMMARY_FILE"
+        echo "Out-of-distribution benchmark: $benchmark" >> "$SUMMARY_FILE"
         # Extract final percent error from training output if available
         if grep -q "Percent Error" "$RUN_DIR/training_output.txt"; then
             FINAL_METRICS=$(tail -20 "$RUN_DIR/training_output.txt" | grep "Percent Error" | tail -1)

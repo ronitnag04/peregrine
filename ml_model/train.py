@@ -84,6 +84,12 @@ def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
             else int(x.replace("MiB", "")) * 1024**2 if "MiB" in x 
             else int(x))
 
+    # Reciprocal values for queue sizes
+    queue_size_columns = ["lq_entries", "sq_entries", "rob_size"]
+    for col in queue_size_columns:
+        reciprocal_col_name = f"reciprocal_{col}"
+        features[reciprocal_col_name] = 1.0 / features[col]
+
     return features
 
 
@@ -98,8 +104,7 @@ def parse_args() -> argparse.Namespace:
         "-t",
         "--test-size",
         type=float,
-        help="Fraction of the dataset to use for testing",
-        default=0.25,
+        help="Fraction of the dataset to use for testing"
     )
     parser.add_argument(
         "--test-benchmarks",
@@ -228,19 +233,15 @@ def main() -> None:
     print('------------ End Training ---------------')
     total_duration = time.perf_counter() - total_start
 
-    checkpoints_dir = os.path.join(args.output_dir, "checkpoints")
-    os.makedirs(checkpoints_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoints_dir, f"{dataset_name}_checkpoint.pt")
+    checkpoint_path = os.path.join(args.output_dir, f"checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
     xm.save(checkpoint, checkpoint_path)
 
     # Persist preprocessing artifacts so inference can reproduce training transforms.
-    scaler_path = os.path.join(checkpoints_dir, f"{dataset_name}_scaler.joblib")
+    scaler_path = os.path.join(args.output_dir, f"scaler.joblib")
     joblib.dump(scaler, scaler_path)
 
-    training_metrics_dir = os.path.join(args.output_dir, "training_metrics")
-    os.makedirs(training_metrics_dir, exist_ok=True)
-    metrics_path = os.path.join(training_metrics_dir, f"{dataset_name}_metrics.json")
+    metrics_path = os.path.join(args.output_dir, f"metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(
             {
