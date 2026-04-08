@@ -83,15 +83,6 @@ for test_size in "${TEST_SIZES[@]}"; do
             PERCENT_ERROR=$(echo "$FINAL_METRICS" | grep -o "Percent Error: [0-9]*\.[0-9]*%" | cut -d' ' -f3)
             echo "  Final Percent Error: $PERCENT_ERROR" >> "$SUMMARY_FILE"
         fi
-        if [ -f "$METRICS_PATH" ]; then
-            echo "  Metrics file: $METRICS_PATH" >> "$SUMMARY_FILE"
-        fi
-        if [ -f "$CHECKPOINT_PATH" ]; then
-            echo "  Checkpoint: $CHECKPOINT_PATH" >> "$SUMMARY_FILE"
-        fi
-        if [ -f "$SCALER_PATH" ]; then
-            echo "  Scaler: $SCALER_PATH" >> "$SUMMARY_FILE"
-        fi
         echo "" >> "$SUMMARY_FILE"
     fi
 done
