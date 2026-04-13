@@ -303,51 +303,131 @@ def summarize_cache_latencies(
     configs_json: str | Path | None = None,
     percentiles: tuple[int, ...] = (50, 75, 95),
 ) -> list[dict[str, Any]]:
+    """
+    Summarize cache latencies from cache_latencies directory.
+    
+    This function now looks for cache latencies in the cache_latencies/ subdirectory
+    with the naming pattern: l1i_<size>_l1d_<size>_l2_<size>_cache_latencies.npy
+    """
     trace_csv = Path(trace_csv)
 
-    if latencies_npy is None:
-        lat_path = _find_sidecar(trace_csv, ["trace_latencies.npy", "_latencies.npy"])
-    else:
-        lat_path = Path(latencies_npy)
-    if lat_path is None or not lat_path.exists():
-        raise FileNotFoundError(
-            f"Could not find latencies .npy for trace {trace_csv}. "
-            "Expected trace_latencies.npy or <stem>_latencies.npy (or pass --latencies-npy)."
-        )
-
-    if configs_json is None:
-        cfg_path = _find_sidecar(trace_csv, ["trace_configs.json", "_configs.json"])
-    else:
-        cfg_path = Path(configs_json)
-    if cfg_path is None or not cfg_path.exists():
-        raise FileNotFoundError(
-            f"Could not find configs .json for trace {trace_csv}. "
-            "Expected trace_configs.json or <stem>_configs.json (or pass --configs-json)."
-        )
-
-    meta = json.loads(cfg_path.read_text())
-    configs = meta.get("configs", [])
-
-    mmap = np.load(lat_path, mmap_mode="r")  # shape (C, N, 2)
-    if mmap.ndim != 3 or mmap.shape[2] != 2:
-        raise ValueError(f"{lat_path}: expected shape (C, N, 2), got {mmap.shape}")
+    # Look in cache_latencies directory for .npy files
+    cache_latencies_dir = trace_csv.parent / "cache_latencies"
+    
+    if not cache_latencies_dir.exists():
+        raise FileNotFoundError(f"Cache latencies directory not found: {cache_latencies_dir}")
 
     rows: list[dict[str, Any]] = []
-    C = int(mmap.shape[0])
     ps = list(percentiles)
-    for i in range(C):
-        fetch = np.asarray(mmap[i, :, 0], dtype=np.float32)
-        exe = np.asarray(mmap[i, :, 1], dtype=np.float32)
-        r: dict[str, Any] = {"config_idx": i}
-        if i < len(configs):
-            l1i, l1d, l2 = configs[i]
-            r.update({"l1i_kb": int(l1i), "l1d_kb": int(l1d), "l2_kb": int(l2)})
-        r["fetch_mean"] = float(fetch.mean()) if fetch.size else 0.0
-        r["exec_mean"] = float(exe.mean()) if exe.size else 0.0
-        for p, v in zip(ps, np.percentile(fetch, ps) if fetch.size else [0.0] * len(ps)):
-            r[f"fetch_p{int(p)}"] = float(v)
-        for p, v in zip(ps, np.percentile(exe, ps) if exe.size else [0.0] * len(ps)):
-            r[f"exec_p{int(p)}"] = float(v)
-        rows.append(r)
+    
+    # Find all cache latency files matching pattern
+    for npy_file in cache_latencies_dir.glob("l1i_*_l1d_*_l2_*_cache_latencies.npy"):
+        # Parse configuration from filename
+        # Expected format: l1i_<l1i>_l1d_<l1d>_l2_<l2>_cache_latencies.npy
+        stem = npy_file.stem.replace("_cache_latencies", "")
+        parts = stem.split("_")
+        
+        try:
+            if len(parts) >= 6 and parts[0] == "l1i" and parts[2] == "l1d" and parts[4] == "l2":
+                l1i_kb = int(parts[1])
+                l1d_kb = int(parts[3]) 
+                l2_kb = int(parts[5])
+            else:
+                print(f"Warning: Could not parse cache config from filename: {npy_file.name}")
+                continue
+                
+            # Load latency data
+            latency_data = np.load(npy_file)  # shape (N, 2): fetch_latency, exec_latency
+            
+            if latency_data.ndim != 2 or latency_data.shape[1] != 2:
+                print(f"Warning: Unexpected latency data shape in {npy_file}: {latency_data.shape}")
+                continue
+                
+            fetch = latency_data[:, 0].astype(np.float32)
+            exe = latency_data[:, 1].astype(np.float32)
+            
+            r: dict[str, Any] = {
+                "l1i_kb": l1i_kb,
+                "l1d_kb": l1d_kb, 
+                "l2_kb": l2_kb,
+                "fetch_mean": float(fetch.mean()) if fetch.size else 0.0,
+                "exec_mean": float(exe.mean()) if exe.size else 0.0,
+            }
+            
+            # Add percentiles for fetch latencies
+            if fetch.size > 0:
+                fetch_percentiles = np.percentile(fetch, ps)
+                for p, v in zip(ps, fetch_percentiles):
+                    r[f"fetch_p{int(p)}"] = float(v)
+            else:
+                for p in ps:
+                    r[f"fetch_p{int(p)}"] = 0.0
+                    
+            # Add percentiles for exec latencies  
+            if exe.size > 0:
+                exe_percentiles = np.percentile(exe, ps)
+                for p, v in zip(ps, exe_percentiles):
+                    r[f"exec_p{int(p)}"] = float(v)
+            else:
+                for p in ps:
+                    r[f"exec_p{int(p)}"] = 0.0
+            
+            rows.append(r)
+            
+        except Exception as e:
+            print(f"Warning: Could not process {npy_file}: {e}")
+            continue
+            
+    if not rows:
+        raise FileNotFoundError(f"No valid cache latency files found in {cache_latencies_dir}")
+        
+    # Sort by cache configuration for consistent output
+    rows.sort(key=lambda x: (x["l1i_kb"], x["l1d_kb"], x["l2_kb"]))
     return rows
+
+
+def summarize_bp_rates(
+    trace_csv: str | Path,
+    bp_rates_dir: str | Path | None = None,
+) -> dict[str, float]:
+    """
+    Summarize branch predictor rates from bp_rates directory.
+    
+    Args:
+        trace_csv: Path to trace.csv file
+        bp_rates_dir: Optional path to bp_rates directory
+        
+    Returns:
+        Dictionary mapping branch predictor type to misprediction rate
+    """
+    trace_csv = Path(trace_csv)
+    
+    if bp_rates_dir is None:
+        bp_rates_dir = trace_csv.parent / "bp_rates"
+    else:
+        bp_rates_dir = Path(bp_rates_dir)
+        
+    if not bp_rates_dir.exists():
+        raise FileNotFoundError(f"Branch predictor rates directory not found: {bp_rates_dir}")
+    
+    rates: dict[str, float] = {}
+    
+    # Look for bp rate files matching pattern: <type>_bp_rate.npy
+    for npy_file in bp_rates_dir.glob("*_bp_rate.npy"):
+        bp_type = npy_file.stem.replace("_bp_rate", "")
+        
+        try:
+            rate_array = np.load(npy_file)
+            # Extract scalar rate value 
+            rate = float(rate_array.item()) if rate_array.ndim == 0 else float(rate_array[0])
+            
+            rates[bp_type] = rate
+        except Exception as e:
+            print(f"Warning: Could not load {npy_file}: {e}")
+            continue
+    
+    if not rates:
+        raise FileNotFoundError(f"No valid branch predictor rate files found in {bp_rates_dir}")
+        
+    return rates
 

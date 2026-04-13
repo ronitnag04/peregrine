@@ -57,17 +57,21 @@ def _load_bp_rates(traces_root: str, benchmark: str) -> Dict[str, float]:
     """
     Load branch predictor misprediction rates for a benchmark.
 
-    Expected JSON format at: <traces_root>/<benchmark>/trace_bp.json
-      {"local": <float>, "tage": <float>}
+    Expected CSV format at: <traces_root>/<benchmark>/ronamol/bp_rates_summary.csv
     """
-    p = Path(traces_root) / benchmark / "trace_bp.json"
+    p = Path(traces_root) / benchmark / "ronamol" / "bp_rates_summary.csv"
     if not p.exists():
-        raise FileNotFoundError(f"Missing trace_bp.json for {benchmark!r}: {p}")
-    data = json.loads(p.read_text())
-    return {
-        "local": float(data.get("local", 0.0)),
-        "tage": float(data.get("tage", 0.0)),
-    }
+        raise FileNotFoundError(f"Missing bp_rates_summary.csv for {benchmark!r}: {p}")
+
+    bp_rates = {}
+    with p.open(newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            if row["bp_type"] == "local":
+                bp_rates["local"] = float(row["misprediction_rate"])
+            elif row["bp_type"] == "tage":
+                bp_rates["tage"] = float(row["misprediction_rate"])
+    return bp_rates
 
 
 @lru_cache(maxsize=None)
@@ -137,6 +141,13 @@ def main() -> None:
     if not bench0:
         raise ValueError("sweep_results.csv missing required column: benchmark")
 
+    check_ff_instructions = False
+    ff_instructions = first_row.get("ff_instructions", "")
+    if ff_instructions:
+        print(f"Found ff_instructions column in sweep_results.csv, using <benchmark>_<ff_instructions> as benchmark directory stem")
+        bench0 = f"{bench0}_{ff_instructions}"
+        check_ff_instructions = True
+
     prog0 = _load_program_features(str(traces_root), bench0)
     cache0 = _load_cache_latency_index(str(traces_root), bench0)
     cache_example = next(iter(cache0.values())) if cache0 else {}
@@ -166,6 +177,13 @@ def main() -> None:
             benchmark = row.get("benchmark", "")
             if not benchmark:
                 raise ValueError("Encountered sweep row without benchmark")
+            
+            if check_ff_instructions:
+                ff_instructions = row.get("ff_instructions", "")
+                if ff_instructions:
+                    benchmark = f"{benchmark}_{ff_instructions}"
+                else:
+                    raise ValueError(f"Found ff_instructions column in sweep_results.csv, but no ff_instructions value for benchmark {benchmark!r}")
 
             prog = _load_program_features(str(traces_root), benchmark)
 
