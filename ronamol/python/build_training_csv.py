@@ -152,8 +152,7 @@ def main() -> None:
     cache0 = _load_cache_latency_index(str(traces_root), bench0)
     cache_example = next(iter(cache0.values())) if cache0 else {}
 
-    # Drop branch_predictor from output; we replace it with a numeric misprediction_rate.
-    sweep_cols = [c for c in first_row.keys() if c != "branch_predictor"]
+    sweep_cols = list(first_row.keys())
 
     prog_keys = sorted(prog0.keys())
     prog_cols = [f"{args.program_prefix}{k}" for k in prog_keys]
@@ -163,7 +162,7 @@ def main() -> None:
         if k not in ("l1i_kb", "l1d_kb", "l2_kb", "config_idx")
     ]
 
-    # Single scalar misprediction rate derived from trace_bp.json for the active predictor.
+    # Scalar misprediction rate derived from trace_bp.json for the active predictor.
     mispred_col = "misprediction_rate"
 
     out_cols = sweep_cols + [mispred_col] + prog_cols + cache_cols
@@ -214,8 +213,6 @@ def main() -> None:
                 )
 
             out_row: Dict[str, Any] = dict(row)
-            # Drop branch_predictor so it matches the header (we replace it with misprediction_rate).
-            out_row.pop("branch_predictor", None)
             out_row[mispred_col] = mispred
 
             for k in prog_keys:
