@@ -5,8 +5,7 @@
 
 set -euo pipefail
 
-DATASET_PATH="training_data/ronamol_spec_training_data.csv"
-# DATASET_PATH="training_data/ronamol_training_data_v3.csv"
+DATASET_PATH="training_data/ronamol_spec_training_data_v2.csv"
 PYTHON_SCRIPT="train.py"
 
 BENCHMARKS=("505.mcf_r" "520.omnetpp_r" "523.xalancbmk_r" "541.leela_r" "548.exchange2_r" "531.deepsjeng_r" "557.xz_r" "525.x264_r" "502.gcc_r") # "500.perlbench_r"
