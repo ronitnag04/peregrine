@@ -110,15 +110,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
-        "--test-regions",
+        "--test-size",
+        help="Size of the test dataset",
+        default=0.25,
         type=float,
-        required=True,
-        help="Fraction of each benchmark's regions to use for testing",
-    )
-    parser.add_argument(
-        "--train-configs",
-        type=float,
-        help="Fraction of configs per region to use for training",
     )
     parser.add_argument(
         "-o",
@@ -137,36 +132,10 @@ def main() -> None:
     dataset = load_dataset(args.dataset_path)
     print(f'Dataset size: {dataset.shape[0]}')
 
-    train_dfs = []
-    test_dfs = []
-
-    print(f"Moving {args.test_regions:.1%} of regions from each benchmark to test set")
-    for benchmark in dataset["benchmark"].unique():
-        benchmark_regions = dataset[dataset["benchmark"] == benchmark]["ff_instructions"].unique()
-        num_test_regions = int(args.test_regions * len(benchmark_regions))
-
-        if num_test_regions > 0:
-            benchmark_test_regions = np.random.choice(benchmark_regions, size=num_test_regions, replace=False)
-
-            train_mask = (dataset["benchmark"] == benchmark) & (~dataset["ff_instructions"].isin(benchmark_test_regions))
-            test_mask = (dataset["benchmark"] == benchmark) & (dataset["ff_instructions"].isin(benchmark_test_regions))
-
-            train_dfs.append(dataset[train_mask])
-            test_dfs.append(dataset[test_mask])
-        else:
-            raise ValueError(f"num_test_regions is 0 for benchmark {benchmark}")
-
-    train_dataset = pd.concat(train_dfs, ignore_index=True)
-    test_dataset = pd.concat(test_dfs, ignore_index=True)
-
-    if args.train_configs:
-        sampled_train_dfs = []
-        for (benchmark, ff_instr), region_df in train_dataset.groupby(['benchmark', 'ff_instructions']):
-            num_samples = int(args.train_configs * len(region_df))
-            sampled_region = region_df.sample(n=num_samples, random_state=42)
-            sampled_train_dfs.append(sampled_region)
-        train_dataset = pd.concat(sampled_train_dfs, ignore_index=True)
-        print(f"Sampled {args.train_configs:.1%} of configs per region: {len(train_dataset)} train samples")
+    # Group by 'benchmark' and 'ff_instructions' to identify regions, then pick one row at random per region (1 config per region)
+    samples = dataset.groupby(['benchmark', 'ff_instructions']).apply(lambda g: g.sample(1, random_state=42)).reset_index()
+    samples.drop(columns=["level_2"], inplace=True)
+    train_dataset, test_dataset = train_test_split(samples, test_size=0.25, random_state=42)
 
     # Assert there are no duplicate rows between train and test datasets, and no duplicates within each dataset
     assert len(train_dataset) == len(train_dataset.drop_duplicates()), "Train dataset has duplicates"
