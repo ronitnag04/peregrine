@@ -106,130 +106,73 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-d",
         "--dataset-path",
+        required=True,
         help="Path to the Peregrine dataset csv file",
-    )
-    parser.add_argument(
-        "--test-size",
-        type=float,
-        help="Fraction of the dataset to use for testing"
-    )
-    parser.add_argument(
-        "--test-benchmarks",
-        help="Comma-separated list of benchmarks to use for testing",
-        default="",
     )
     parser.add_argument(
         "--test-regions",
         type=float,
+        required=True,
         help="Fraction of each benchmark's regions to use for testing",
     )
     parser.add_argument(
-        "--test-configs",
+        "--train-configs",
         type=float,
-        help="Fraction of configs to use for testing",
-    )
-    parser.add_argument(
-        "--drop-benchmarks",
-        help="Comma-separated list of benchmarks to drop entirely from training and testing",
-        default="",
+        help="Fraction of configs per region to use for training",
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         help="Output directory for checkpoint and metrics files",
-        default=".",
+        default="training_results",
     )
 
     args = parser.parse_args()
-
-    if args.test_size is not None and (args.test_benchmarks or args.test_regions or args.test_configs):
-        parser.error("Cannot specify both test_size and test_benchmarks, test_regions, or test_configs")
-
-    if not (args.test_benchmarks or args.test_regions or args.test_configs) and args.test_size is None:
-        parser.error("Must specify either test_size or test_benchmarks, test_regions, or test_configs")
-
-    if args.test_benchmarks and args.test_regions:
-        parser.error("Cannot specify both test_benchmarks and test_regions")
 
     return args
 
 
 def main() -> None:
     args = parse_args()
-    dataset_name = os.path.basename(args.dataset_path).split('.')[0]
     dataset = load_dataset(args.dataset_path)
     print(f'Dataset size: {dataset.shape[0]}')
 
-    # Create output directory if it doesn't exist
-    os.makedirs(args.output_dir, exist_ok=True)
+    train_dfs = []
+    test_dfs = []
 
-    if args.drop_benchmarks:
-        drop_list = [b.strip() for b in args.drop_benchmarks.split(",") if b.strip()]
-        if drop_list:
-            before = len(dataset)
-            dataset = dataset[~dataset["benchmark"].isin(drop_list)]
-            after = len(dataset)
-            print(f"Dropped benchmarks {drop_list}: {before - after} rows removed, {after} remaining.")
+    print(f"Moving {args.test_regions:.1%} of regions from each benchmark to test set")
+    for benchmark in dataset["benchmark"].unique():
+        benchmark_regions = dataset[dataset["benchmark"] == benchmark]["ff_instructions"].unique()
+        num_test_regions = int(args.test_regions * len(benchmark_regions))
 
-    if args.test_size:
-        print(f"Using train/test split with test size {args.test_size}")
-        train_dataset, test_dataset = train_test_split(dataset, test_size=args.test_size, random_state=42)
-    else:
-        data_points = dataset.shape[0]
+        if num_test_regions > 0:
+            benchmark_test_regions = np.random.choice(benchmark_regions, size=num_test_regions, replace=False)
 
-        train_dataset = dataset
-        test_dataset = None
+            train_mask = (dataset["benchmark"] == benchmark) & (~dataset["ff_instructions"].isin(benchmark_test_regions))
+            test_mask = (dataset["benchmark"] == benchmark) & (dataset["ff_instructions"].isin(benchmark_test_regions))
 
-        if args.test_configs:
-            config_columns = ['branch_predictor', 'commit_width', 'decode_width', 'fetch_width', 'fp_mult_div_issue_width', 'fp_reg_issue_width',
-                                'int_mult_div_issue_width', 'int_reg_issue_width', 'l1d_size', 'l1i_size', 'l2_size', 'lq_entries', 
-                                'max_icache_fills', 'rdwr_port_issue_width', 'read_port_issue_width', 'rename_width', 'rob_size', 
-                                'simd_unit_issue_width', 'sq_entries', 'stride_prefetcher_degree']
+            train_dfs.append(dataset[train_mask])
+            test_dfs.append(dataset[test_mask])
+        else:
+            raise ValueError(f"num_test_regions is 0 for benchmark {benchmark}")
 
-            configs = dataset.groupby(config_columns).size().reset_index()[config_columns]
+    train_dataset = pd.concat(train_dfs, ignore_index=True)
+    test_dataset = pd.concat(test_dfs, ignore_index=True)
 
-            configs_shuffled = configs.sample(frac=1, random_state=42).reset_index(drop=True)
-            num_configs = len(configs_shuffled)
-            split_idx = int(num_configs * args.test_configs)
+    if args.train_configs:
+        sampled_train_dfs = []
+        for (benchmark, ff_instr), region_df in train_dataset.groupby(['benchmark', 'ff_instructions']):
+            num_samples = int(args.train_configs * len(region_df))
+            sampled_region = region_df.sample(n=num_samples, random_state=42)
+            sampled_train_dfs.append(sampled_region)
+        train_dataset = pd.concat(sampled_train_dfs, ignore_index=True)
+        print(f"Sampled {args.train_configs:.1%} of configs per region: {len(train_dataset)} train samples")
 
-            test_configs_df = configs_shuffled.iloc[:split_idx]
-            
-            print(f"Moving {len(test_configs_df)} configurations ({args.test_configs:.1%}) to test set")
-
-            test_dataset = dataset.merge(test_configs_df, on=config_columns, how='inner')
-            train_dataset = dataset.merge(test_configs_df, on=config_columns, how='outer', indicator=True).query('_merge == "left_only"').drop(columns=['_merge'])
-
-        if args.test_regions:
-            print(f"Moving {args.test_regions:.1%} of regions from each benchmark to test set")
-            if test_dataset is None:
-                test_dataset = train_dataset
-            for benchmark in dataset["benchmark"].unique():
-                benchmark_regions = dataset[dataset["benchmark"] == benchmark]["ff_instructions"].unique()
-                num_test_regions = int(args.test_regions * len(benchmark_regions))
-
-                if num_test_regions > 0:
-                    benchmark_test_regions = np.random.choice(benchmark_regions, size=num_test_regions, replace=False)
-                    
-                    benchmark_mask = train_dataset["benchmark"] == benchmark
-                    region_mask = ~train_dataset["ff_instructions"].isin(benchmark_test_regions)
-                    train_dataset = train_dataset[~benchmark_mask | region_mask]
-                    
-                    benchmark_mask = test_dataset["benchmark"] == benchmark
-                    region_mask = test_dataset["ff_instructions"].isin(benchmark_test_regions)
-                    test_dataset = test_dataset[~benchmark_mask | region_mask]
-                else:
-                    raise ValueError(f"num_test_regions is 0 for benchmark {benchmark}")
-        elif args.test_benchmarks:
-            test_benchmarks_names = [b.strip() for b in args.test_benchmarks.split(",") if b.strip()]
-            print(f"Moving benchmarks {args.test_benchmarks} to test set")
-
-            if test_dataset is None:
-                test_dataset = train_dataset
-
-            mask = train_dataset["benchmark"].isin(test_benchmarks_names)
-            train_dataset = train_dataset[~mask]
-            mask = test_dataset["benchmark"].isin(test_benchmarks_names)
-            test_dataset = test_dataset[mask]
+    # Assert there are no duplicate rows between train and test datasets, and no duplicates within each dataset
+    assert len(train_dataset) == len(train_dataset.drop_duplicates()), "Train dataset has duplicates"
+    assert len(test_dataset) == len(test_dataset.drop_duplicates()), "Test dataset has duplicates"
+    combined_dataset = pd.concat([train_dataset, test_dataset])
+    assert len(combined_dataset.drop_duplicates()) == len(combined_dataset), "No duplicates between train and test datasets"
 
     print(f"Final split: {len(train_dataset)} train, {len(test_dataset)} test ({len(test_dataset)/(len(train_dataset)+len(test_dataset)):.2%} test)")
     print(f"Train dataset shape: {train_dataset.shape}")
@@ -249,9 +192,9 @@ def main() -> None:
     test_labels = test_dataset["cpi"]
 
     train_features_t = torch.from_numpy(train_features.to_numpy(copy=True)).float()
-    train_labels_t = torch.from_numpy(train_labels.to_numpy(copy=True, dtype=float)).float().unsqueeze(1)
+    train_labels_t = torch.from_numpy(train_labels.to_numpy(copy=True)).float().unsqueeze(1)
     test_features_t = torch.from_numpy(test_features.to_numpy(copy=True)).float()
-    test_labels_t = torch.from_numpy(test_labels.to_numpy(copy=True, dtype=float)).float().unsqueeze(1)
+    test_labels_t = torch.from_numpy(test_labels.to_numpy(copy=True)).float().unsqueeze(1)
 
     train_ds = TensorDataset(train_features_t, train_labels_t)
     test_ds = TensorDataset(test_features_t, test_labels_t)
@@ -305,6 +248,9 @@ def main() -> None:
 
     print('------------ End Training ---------------')
     total_duration = time.perf_counter() - total_start
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     checkpoint_path = os.path.join(args.output_dir, f"checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
