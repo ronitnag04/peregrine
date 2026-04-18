@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import time
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -25,6 +26,7 @@ def load_dataset(dataset_path: str) -> pd.DataFrame:
 def train_epoch(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, optimizer: optim.Optimizer, device: str) -> float:
     model.train()
     total_loss = 0.0
+    num_batches = 0
     for inputs, targets in loader:
         inputs = inputs.to(device)
         targets = targets.to(device)
@@ -34,8 +36,9 @@ def train_epoch(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, optimi
         loss.backward()
         optimizer.step()
         torch_xla.sync()
-        total_loss += loss.detach().to("cpu")
-    return total_loss / max(len(loader), 1)
+        total_loss += loss.item()
+        num_batches += 1
+    return total_loss / max(num_batches, 1)
 
 
 def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: str) -> tuple[float, float]:
@@ -43,6 +46,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     total_loss = 0.0
     total_percent_error = 0.0
     num_batches = 0
+
     with torch.no_grad():
         for inputs, targets in loader:
             inputs = inputs.to(device)
@@ -50,14 +54,14 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
             outputs = model(inputs)
             loss = criterion(outputs, targets)
             torch_xla.sync()
-            total_loss += loss.detach().to("cpu")
+            total_loss += loss.item()
             # Compute mean absolute percent error for this batch.
             # Add small epsilon to denominator to avoid division by zero.
             eps = 1e-8
             batch_percent_error = (
                 (torch.abs(outputs - targets) / (torch.abs(targets) + eps)).mean() * 100.0
             )
-            total_percent_error += batch_percent_error.detach().to("cpu")
+            total_percent_error += batch_percent_error.item()
             num_batches += 1
 
     denom = max(num_batches, 1)
@@ -66,16 +70,20 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     return float(avg_loss), float(avg_percent_error)
 
 
-def benchmark_train_test_split(dataset: pd.DataFrame, test_benchmarks: list[str]) -> None:
-    train_dataset = dataset[~dataset["benchmark"].isin(test_benchmarks)]
-    test_dataset = dataset[dataset["benchmark"].isin(test_benchmarks)]
-    return train_dataset, test_dataset
-
-
 def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
+    # Drop metric columns (Y in the X -> Y regression problem)
+    features = features.drop(columns=["cpi"])
+
+    # Drop columns encoding program region
+    features = features.drop(columns=["benchmark", "ff_instructions"])
+
+    # Split stride_prefetch into 1-hot encoded columns
     stride_prefetch_dummies = pd.get_dummies(features["stride_prefetcher_degree"], prefix="stride_prefetcher_degree")
-    features = features.drop(columns=["cpi", "benchmark", "stride_prefetcher_degree"])
+    features = features.drop(columns=["stride_prefetcher_degree"])
     features = pd.concat([features, stride_prefetch_dummies], axis=1)
+
+    # Drop branch_predictor (captured by misprediction rate column)
+    features = features.drop(columns=["branch_predictor"])
 
     memsize_colummns = ["l1d_size", "l1i_size", "l2_size"]
     for col in memsize_colummns:
@@ -101,67 +109,35 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
-        "-t",
         "--test-size",
+        default=0.25,
         type=float,
         help="Fraction of the dataset to use for testing"
-    )
-    parser.add_argument(
-        "--test-benchmarks",
-        help="Comma-separated list of benchmarks to use for testing",
-        default="",
-    )
-    parser.add_argument(
-        "--drop-benchmarks",
-        help="Comma-separated list of benchmarks to drop entirely from training and testing",
-        default="",
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         help="Output directory for checkpoint and metrics files",
-        default=".",
+        default="training_results",
     )
 
     args = parser.parse_args()
-
-    if args.test_size is not None and args.test_benchmarks:
-        parser.error("Cannot specify both test_size and test_benchmarks")
 
     return args
 
 
 def main() -> None:
     args = parse_args()
-    dataset_name = os.path.basename(args.dataset_path).split('.')[0]
+
+    print(f"Loading dataset from {args.dataset_path}")
     dataset = load_dataset(args.dataset_path)
-
-    # Create output directory if it doesn't exist
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    # Optionally drop benchmarks considered outliers from the dataset entirely.
-    if args.drop_benchmarks:
-        drop_list = [b.strip() for b in args.drop_benchmarks.split(",") if b.strip()]
-        if drop_list:
-            before = len(dataset)
-            dataset = dataset[~dataset["benchmark"].isin(drop_list)]
-            after = len(dataset)
-            print(f"Dropped benchmarks {drop_list}: {before - after} rows removed, {after} remaining.")
-
     print(f'Dataset size: {dataset.shape[0]}')
+    print(f"Using train/test split with test size {args.test_size}")
+    train_dataset, test_dataset = train_test_split(dataset, test_size=args.test_size, random_state=42)
 
-    if args.test_benchmarks:
-        test_benchmarks = [b.strip() for b in args.test_benchmarks.split(",") if b.strip()]
-        print(f"Using test benchmarks: {test_benchmarks}")
-        train_dataset, test_dataset = benchmark_train_test_split(dataset, test_benchmarks)
-        print(f"Train dataset size: {train_dataset.shape[0]}")
-        print(f"Test dataset size: {test_dataset.shape[0]}")
-    else:
-        test_size = args.test_size
-        print(f"Using default train/test split with test size {test_size}")
-        train_dataset, test_dataset = train_test_split(dataset, test_size=test_size, random_state=42)
-        print(f"Train dataset size: {train_dataset.shape[0]}")
-        print(f"Test dataset size: {test_dataset.shape[0]}")
+    print(f"Final split: {len(train_dataset)} train, {len(test_dataset)} test ({len(test_dataset)/(len(train_dataset)+len(test_dataset)):.2%} test)")
+    print(f"Train dataset shape: {train_dataset.shape}")
+    print(f"Test dataset shape: {test_dataset.shape}")
 
     train_features = pre_process_features(train_dataset)
     test_features = pre_process_features(test_dataset)
@@ -184,8 +160,8 @@ def main() -> None:
     train_ds = TensorDataset(train_features_t, train_labels_t)
     test_ds = TensorDataset(test_features_t, test_labels_t)
 
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
-    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=512, shuffle=True)
+    test_loader = DataLoader(test_ds, batch_size=512, shuffle=False)
 
     device = "xla"
     epochs = 200
@@ -218,7 +194,8 @@ def main() -> None:
             f"Epoch {epoch:02d} | "
             f"Train Loss: {train_loss:.4f} | "
             f"Eval Loss: {eval_loss:.4f} | "
-            f"Percent Error: {percent_error:.2f}%"
+            f"Percent Error: {percent_error:.2f}% | "
+            f"Time: {epoch_duration:.2f}s"
         )
 
         if eval_loss < best_eval_loss:
@@ -232,6 +209,9 @@ def main() -> None:
 
     print('------------ End Training ---------------')
     total_duration = time.perf_counter() - total_start
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     checkpoint_path = os.path.join(args.output_dir, f"checkpoint.pt")
     checkpoint = {'state_dict': model.state_dict()}
