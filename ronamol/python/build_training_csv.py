@@ -6,6 +6,7 @@ Build a Ronamol training CSV by joining:
 2) per-benchmark ronamol program features: <traces>/<benchmark>/ronamol/program_features.json
 3) per-benchmark cache latency summary:   <traces>/<benchmark>/ronamol/cache_latency_summary.csv
    matched by sweep columns (l1i_size,l1d_size,l2_size) → (l1i_kb,l1d_kb,l2_kb)
+4) per-benchmark branch predictor misprediction rates: <traces>/<benchmark>/ronamol/bp_rates_summary.csv
 
 Output: one row per sweep row with appended program + cache-lat columns.
 """

@@ -13,7 +13,7 @@ Expects the following directory structure:
       └── tage_bp_rate.npy
 
 Writes:
-  - <trace_dir>/ronamol/program_features.json
+  - <trace_dir>/ronamol/program_features.(csv|json)
   - <trace_dir>/ronamol/cache_latency_summary.(csv|json)
   - <trace_dir>/ronamol/bp_rates_summary.(csv|json)
 """
@@ -64,6 +64,12 @@ def main() -> None:
     ap.add_argument("--configs-json", default=None, help="Optional path to cache configs .json file")
     ap.add_argument("--bp-rates-dir", default=None, help="Optional path to bp_rates directory")
     ap.add_argument(
+        "--program-features-format",
+        choices=["json", "csv"],
+        default="csv",
+        help="Format for program features output",
+    )
+    ap.add_argument(
         "--cache-lat-format",
         choices=["json", "csv"],
         default="csv",
@@ -82,8 +88,13 @@ def main() -> None:
     print(f"Generating features for trace: {trace_csv}")
 
     prog = compute_program_features(trace_csv)
-    _write_json(out_dir / "program_features.json", prog.to_dict())
-    print(f" - Wrote program_features.json to {out_dir / 'program_features.json'}")
+    prog_row = prog.to_dict()
+    if args.program_features_format == "json":
+        _write_json(out_dir / "program_features.json", prog_row)
+        print(f" - Wrote program_features.json to {out_dir / 'program_features.json'}")
+    else:
+        _write_csv(out_dir / "program_features.csv", [prog_row])
+        print(f" - Wrote program_features.csv to {out_dir / 'program_features.csv'}")
 
     # Generate cache latency summary
     rows = summarize_cache_latencies(
