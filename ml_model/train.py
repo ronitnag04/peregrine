@@ -75,7 +75,7 @@ def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
     features = features.drop(columns=["cpi"])
 
     # Drop columns encoding program region
-    features = features.drop(columns=["benchmark", "ff_instructions"])
+    features = features.drop(columns=["benchmark", "checkpoint", "fast_forward"])
 
     # Split stride_prefetch into 1-hot encoded columns
     stride_prefetch_dummies = pd.get_dummies(features["stride_prefetcher_degree"], prefix="stride_prefetcher_degree")

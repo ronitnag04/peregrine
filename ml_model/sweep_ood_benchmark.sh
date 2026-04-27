@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-DATASET_PATH="training_data/ronamol_spec_training_data_v2.csv"
-PYTHON_SCRIPT="train.py"
+DATASET_PATH="training_data/ronamol_spec_training_data_v3.csv"
+PYTHON_SCRIPT="train_ood_benchmarks.py"
 
 BENCHMARKS=("505.mcf_r" "520.omnetpp_r" "523.xalancbmk_r" "541.leela_r" "548.exchange2_r" "531.deepsjeng_r" "557.xz_r" "525.x264_r" "502.gcc_r") # "500.perlbench_r"
 # BENCHMARKS=("branch_storm" "collatz" "dhrystone" "linpack" "sieve" "sparse" "towers" "whetstone")
@@ -17,8 +17,9 @@ echo "=========================================="
 
 # Create results directory
 mkdir -p sweep_results
-SWEEP_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-SWEEP_DIR="sweep_results/sweep_${SWEEP_TIMESTAMP}"
+# SWEEP_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+# SWEEP_DIR="sweep_results/sweep_${SWEEP_TIMESTAMP}"
+SWEEP_DIR="sweep_results/ood_spec_v3"
 mkdir -p "$SWEEP_DIR"
 
 # Log file for the sweep
@@ -46,7 +47,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
     METRICS_PATH="$OUTPUT_DIR/metrics.json"
 
     # Run training and capture output
-    if python "$PYTHON_SCRIPT" -d "$DATASET_PATH" --test-benchmarks "$benchmark" --output-dir "$OUTPUT_DIR" > "$RUN_DIR/training_output.txt" 2>&1; then
+    if python "$PYTHON_SCRIPT" -d "$DATASET_PATH" --ood-benchmark "$benchmark" --output-dir "$OUTPUT_DIR" > "$RUN_DIR/training_output.txt" 2>&1; then
         echo "✓ Training completed successfully for out-of-distribution benchmark: $benchmark"
         echo "Out-of-distribution benchmark: $benchmark - COMPLETED at $(date)" >> "$SWEEP_LOG"
     else

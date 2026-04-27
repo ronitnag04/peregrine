@@ -106,14 +106,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-d",
         "--dataset-path",
-        required=True,
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
-        "--test-size",
-        help="Size of the test dataset",
-        default=0.25,
-        type=float,
+        "--ood-benchmark",
+        type=str,
+        help="OOD benchmark to use for testing"
     )
     parser.add_argument(
         "-o",
@@ -129,19 +127,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    print(f"Loading dataset from {args.dataset_path}")
     dataset = load_dataset(args.dataset_path)
     print(f'Dataset size: {dataset.shape[0]}')
-
-    # Group by 'benchmark' and 'ff_instructions' to identify regions, then pick one row at random per region (1 config per region)
-    samples = dataset.groupby(['benchmark', 'ff_instructions']).apply(lambda g: g.sample(1, random_state=42)).reset_index()
-    samples.drop(columns=["level_2"], inplace=True)
-    train_dataset, test_dataset = train_test_split(samples, test_size=0.25, random_state=42)
-
-    # Assert there are no duplicate rows between train and test datasets, and no duplicates within each dataset
-    assert len(train_dataset) == len(train_dataset.drop_duplicates()), "Train dataset has duplicates"
-    assert len(test_dataset) == len(test_dataset.drop_duplicates()), "Test dataset has duplicates"
-    combined_dataset = pd.concat([train_dataset, test_dataset])
-    assert len(combined_dataset.drop_duplicates()) == len(combined_dataset), "No duplicates between train and test datasets"
+    print(f"Using OOD benchmark {args.ood_benchmark}")
+    test_dataset = dataset[dataset["benchmark"] == args.ood_benchmark]
+    train_dataset = dataset[dataset["benchmark"] != args.ood_benchmark]
 
     print(f"Final split: {len(train_dataset)} train, {len(test_dataset)} test ({len(test_dataset)/(len(train_dataset)+len(test_dataset)):.2%} test)")
     print(f"Train dataset shape: {train_dataset.shape}")
@@ -172,13 +164,13 @@ def main() -> None:
     test_loader = DataLoader(test_ds, batch_size=512, shuffle=False)
 
     device = "xla"
-    epochs = 200
+    epochs = 500
     model = PeregrineMLModel(input_size=train_features.shape[1], hidden_dims=[256, 128], output_size=1).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001) #, weight_decay=0.3)
     # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5000, 6000, 7000, 8000], gamma=0.5)
     loss_fn = nn.L1Loss()
 
-    early_stop_patience = 10
+    early_stop_patience = 50
     best_eval_loss = float("inf")
     epochs_without_improvement = 0
 
