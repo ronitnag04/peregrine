@@ -114,6 +114,12 @@ def parse_args() -> argparse.Namespace:
         help="OOD benchmark to use for testing"
     )
     parser.add_argument(
+        "--ood-train-size",
+        type=int,
+        help="Number of OOD data points to use in training set",
+        default=0,
+    )
+    parser.add_argument(
         "-o",
         "--output-dir",
         help="Output directory for checkpoint and metrics files",
@@ -134,6 +140,11 @@ def main() -> None:
     print(f"Using OOD benchmark {args.ood_benchmark}")
     test_dataset = dataset[dataset["benchmark"] == args.ood_benchmark]
     train_dataset = dataset[dataset["benchmark"] != args.ood_benchmark]
+
+    if args.ood_train_size > 0:
+        ood_train_dataset = test_dataset.sample(n=args.ood_train_size)
+        train_dataset = pd.concat([train_dataset, ood_train_dataset])
+        test_dataset = test_dataset.drop(ood_train_dataset.index)
 
     print(f"Final split: {len(train_dataset)} train, {len(test_dataset)} test ({len(test_dataset)/(len(train_dataset)+len(test_dataset)):.2%} test)")
     print(f"Train dataset shape: {train_dataset.shape}")
