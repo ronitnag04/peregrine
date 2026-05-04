@@ -45,7 +45,7 @@ CONFLICT_PAIRS=(
   "ptrchase_rand,many_pages_streaming"
 )
 
-SWEEP_DIR="sweep_results/adversarial_spec_v3_combined"
+SWEEP_DIR="sweep_results/spec_v3_adversarial_v1"
 mkdir -p "$SWEEP_DIR"
 
 SWEEP_LOG="$SWEEP_DIR/sweep_log.txt"
