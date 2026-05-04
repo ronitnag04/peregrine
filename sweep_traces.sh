@@ -13,10 +13,11 @@
 # - PEREGRINE_ROOT: Root directory containing gen_bp_rate.py and gen_cache_latency.py
 #
 # Each trace directory should contain a trace.csv file.
-# Output files are created in each trace directory:
-#   - cache_latencies/l1i_<size>_l1d_<size>_l2_<size>_cache_latencies.npy
-#   - bp_rates/<type>_bp_rate.npy
-#   - ronamol/program_features.json
+# Output files are created in each trace directory (see gen_cache_latency.py,
+# gen_bp_rate.py, ronamol/python/gen_features.py):
+#   - cache_latencies/l1i_<l1i_kb>_l1d_<l1d_kb>_l2_<l2_kb>_cache_latencies.npy
+#   - bp_rates/<local|tage>_bp_rate.npy
+#   - ronamol/program_features.csv
 #   - ronamol/cache_latency_summary.csv
 #   - ronamol/bp_rates_summary.csv
 
@@ -140,13 +141,12 @@ run_features() {
   local trace_dir
   trace_dir="$(dirname "$trace_file")"
   local output_dir="$trace_dir/ronamol"
-  local program_features_file="$output_dir/program_features.json"
+  local program_features_file="$output_dir/program_features.csv"
   local cache_summary_file="$output_dir/cache_latency_summary.csv"
   local bp_summary_file="$output_dir/bp_rates_summary.csv"
 
-  # Skip if all output files already exist
   if [[ -f "$program_features_file" && -f "$cache_summary_file" && -f "$bp_summary_file" ]]; then
-    echo "Feature output already exists, skipping: $(basename "$trace_dir")"
+    echo "Feature outputs already exist, skipping: $(basename "$trace_dir")"
     return 0
   fi
 
