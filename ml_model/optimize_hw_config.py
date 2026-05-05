@@ -11,8 +11,9 @@ in four sequential stages:
   4. Archive-wide Pareto extraction, decoding, sensitivity annotation, and
      validation-candidate flagging.
 
-Feature preprocessing reuses ``train.pre_process_features`` so the rows seen
-by the model here match exactly what the model was trained on.
+Feature preprocessing is precomputed into numpy LUTs by ``FeatureBuilder``,
+matching the columns and transforms applied by ``train.pre_process_features``
+so the rows seen by the model here match what the model was trained on.
 
 Requires the Neuron PyTorch venv:
   source /opt/aws_neuronx_venv_pytorch_2_9/bin/activate
@@ -46,7 +47,6 @@ from pymoo.optimize import minimize
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 from model import PeregrineMLModel
-from train import pre_process_features
 
 # ---------------------------------------------------------------------------
 # Parameterization Grid & Default Parameter Config
@@ -323,8 +323,8 @@ def discover_trace_dirs(traces_dir: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Feature assembly — build rows matching the training CSV, then reuse
-# train.pre_process_features for identical preprocessing.
+# Feature assembly — numpy-only LUTs mirroring train.pre_process_features.
+# Precomputes every per-bundle and per-param feature contribution at startup
 # ---------------------------------------------------------------------------
 
 def _parse_size_to_kb(s: str) -> int:
@@ -361,79 +361,168 @@ CACHE_LATENCY_COLS = (
 )
 
 
-def build_training_shaped_frame(
-    bundles: list[TraceBundle], cfgs: list[dict[str, Any]]
-) -> pd.DataFrame:
+class FeatureBuilder:
+    """Precomputed numpy feature assembler.
+
+    Mirrors ``train.pre_process_features`` exactly, but avoids all per-call
+    pandas work by baking every column's contribution into lookup tables at
+    construction time. The hot path is pure numpy gather + broadcast + z-score.
+
+    Layout of the produced feature matrix (per row):
+      - columns indexed by ``scaler.feature_names_in_``
+      - config-dependent columns vary across cfg axis
+      - bundle-dependent columns (prog_*, cache_*, bp_misprediction_rate) vary
+        across bundle axis
     """
-    ``n_cfgs * n_traces`` rows (cfg-major), schema matching the training CSV
-    pre-preprocessing. train.pre_process_features can then be applied directly.
-    """
-    rows: list[dict[str, Any]] = []
-    for cfg in cfgs:
-        l1i_kb = _parse_size_to_kb(cfg["l1i_size"])
-        l1d_kb = _parse_size_to_kb(cfg["l1d_size"])
-        l2_kb = _parse_size_to_kb(cfg["l2_size"])
-        bp = str(cfg["branch_predictor"]).lower()
-        for tb in bundles:
-            row: dict[str, Any] = {
-                # Dropped in pre_process_features but required by its signature.
-                "cpi": 0.0,
-                "benchmark": "none",
-                "checkpoint": "none",
-                "fast_forward": 0,
-                # HW config.
-                "branch_predictor": bp,
-                "commit_width": int(cfg["commit_width"]),
-                "decode_width": int(cfg["decode_width"]),
-                "fetch_width": int(cfg["fetch_width"]),
-                "fp_mult_div_issue_width": int(cfg["fp_mult_div_issue_width"]),
-                "fp_reg_issue_width": int(cfg["fp_reg_issue_width"]),
-                "int_mult_div_issue_width": int(cfg["int_mult_div_issue_width"]),
-                "int_reg_issue_width": int(cfg["int_reg_issue_width"]),
-                "l1d_size": str(cfg["l1d_size"]),
-                "l1i_size": str(cfg["l1i_size"]),
-                "l2_size": str(cfg["l2_size"]),
-                "lq_entries": int(cfg["lq_entries"]),
-                "max_icache_fills": int(cfg["max_icache_fills"]),
-                "rdwr_port_issue_width": int(cfg["rdwr_port_issue_width"]),
-                "read_port_issue_width": int(cfg["read_port_issue_width"]),
-                "rename_width": int(cfg["rename_width"]),
-                "rob_size": int(cfg["rob_size"]),
-                "simd_unit_issue_width": int(cfg["simd_unit_issue_width"]),
-                "sq_entries": int(cfg["sq_entries"]),
-                "stride_prefetcher_degree": int(cfg["stride_prefetcher_degree"]),
-                # Per-trace: BP misprediction rate for the chosen predictor.
-                "bp_misprediction_rate": float(tb.bp_rates[bp]),
-            }
-            # Per-trace: program features (prog_*) and cache latency features (cache_*).
-            row.update(tb.program)
-            clat = _cache_latency_row(tb, l1i_kb, l1d_kb, l2_kb)
-            for k in CACHE_LATENCY_COLS:
-                row[f"cache_{k}"] = float(clat[k])
-            rows.append(row)
 
-    return pd.DataFrame(rows)
+    def __init__(self, bundles: list[TraceBundle], scaler: StandardScaler) -> None:
+        feature_names: list[str] = [str(c) for c in scaler.feature_names_in_]
+        self.feature_names = feature_names
+        self.n_features = len(feature_names)
+        self.n_bundles = len(bundles)
+        col_idx = {name: i for i, name in enumerate(feature_names)}
 
+        mean = np.asarray(scaler.mean_, dtype=np.float32)
+        scale = np.asarray(scaler.scale_, dtype=np.float32)
 
-def build_scaled_features(
-    bundles: list[TraceBundle],
-    cfgs: list[dict[str, Any]],
-    scaler: StandardScaler,
-) -> pd.DataFrame:
-    """Training-schema DataFrame → pre_process_features → scaler.transform (as in predict.py)."""
-    raw = build_training_shaped_frame(bundles, cfgs)
-    features = pre_process_features(raw)
+        # ---------- Per-bundle static features (prog_* + cache_* + bp_rate) ----------
+        # Shape: (n_l1i, n_l1d, n_l2, n_bundles, n_bp, n_features).
+        # We precompute the full (memory-config × bundle × bp) tensor of
+        # bundle-dependent contributions; the cfg-dependent columns are zero
+        # here and filled separately in transform().
+        l1i_sizes = PARAM_VALUES["l1i_size"]
+        l1d_sizes = PARAM_VALUES["l1d_size"]
+        l2_sizes = PARAM_VALUES["l2_size"]
+        bp_vals = PARAM_VALUES["branch_predictor"]
+        n_l1i, n_l1d, n_l2 = len(l1i_sizes), len(l1d_sizes), len(l2_sizes)
+        n_bp = len(bp_vals)
 
-    # Align to the columns the scaler was fit with. get_dummies may omit
-    # stride_prefetcher_degree_X when no config in the batch picks that value.
-    feature_names = [str(c) for c in scaler.feature_names_in_]
-    for name in feature_names:
-        if name not in features.columns:
-            features[name] = 0.0
+        bundle_feats = np.zeros(
+            (n_l1i, n_l1d, n_l2, self.n_bundles, n_bp, self.n_features),
+            dtype=np.float32,
+        )
+        # Older checkpoints named this column `misprediction_rate`; newer ones
+        # use `bp_misprediction_rate`. Accept either.
+        if "bp_misprediction_rate" in col_idx:
+            bp_rate_col = col_idx["bp_misprediction_rate"]
+        elif "misprediction_rate" in col_idx:
+            bp_rate_col = col_idx["misprediction_rate"]
+        else:
+            raise ValueError(
+                "Scaler is missing a branch-predictor misprediction rate column "
+                "(expected 'bp_misprediction_rate' or 'misprediction_rate')."
+            )
+        for bi, tb in enumerate(bundles):
+            # prog_* columns: same for all (mem-cfg, bp) combinations.
+            for k, v in tb.program.items():
+                if k in col_idx:
+                    bundle_feats[:, :, :, bi, :, col_idx[k]] = float(v)
+            # bp_misprediction_rate varies per (bundle, bp).
+            for bp_i, bp_name in enumerate(bp_vals):
+                bundle_feats[:, :, :, bi, bp_i, bp_rate_col] = float(
+                    tb.bp_rates[str(bp_name).lower()]
+                )
+            # cache_* columns: depend on (mem-cfg, bundle).
+            for li_i, l1i in enumerate(l1i_sizes):
+                for ld_i, l1d in enumerate(l1d_sizes):
+                    for l2_i, l2 in enumerate(l2_sizes):
+                        clat = _cache_latency_row(
+                            tb,
+                            _parse_size_to_kb(l1i),
+                            _parse_size_to_kb(l1d),
+                            _parse_size_to_kb(l2),
+                        )
+                        for k in CACHE_LATENCY_COLS:
+                            name = f"cache_{k}"
+                            if name in col_idx:
+                                bundle_feats[li_i, ld_i, l2_i, bi, :, col_idx[name]] = float(clat[k])
+        self._bundle_feats = bundle_feats
 
-    features = features[feature_names].copy().astype(float)
-    features[features.columns] = scaler.transform(features[features.columns])
-    return features
+        # ---------- Per-search-param contribution LUTs ----------
+        # For each search param we build a (n_values, n_features) table of the
+        # contribution that parameter makes to the feature row. Config features
+        # are the sum of these LUTs over the param axis.
+        self._param_luts: list[np.ndarray] = []
+        for p in SEARCH_PARAM_ORDER:
+            vals = PARAM_VALUES[p]
+            lut = np.zeros((len(vals), self.n_features), dtype=np.float32)
+            if p == "branch_predictor":
+                # Handled via bundle_feats (bp axis) — contributes nothing here.
+                pass
+            elif p in ("l1i_size", "l1d_size", "l2_size"):
+                # Numeric byte-size column (pre_process_features converts KiB/MiB → bytes).
+                if p in col_idx:
+                    for vi, v in enumerate(vals):
+                        lut[vi, col_idx[p]] = float(_size_str_to_bytes(v))
+            elif p == "stride_prefetcher_degree":
+                # One-hot expansion: stride_prefetcher_degree_{value}.
+                for vi, v in enumerate(vals):
+                    name = f"stride_prefetcher_degree_{v}"
+                    if name in col_idx:
+                        lut[vi, col_idx[name]] = 1.0
+            elif p in ("lq_entries", "sq_entries", "rob_size"):
+                # Numeric column + reciprocal column.
+                if p in col_idx:
+                    for vi, v in enumerate(vals):
+                        lut[vi, col_idx[p]] = float(v)
+                recip = f"reciprocal_{p}"
+                if recip in col_idx:
+                    for vi, v in enumerate(vals):
+                        lut[vi, col_idx[recip]] = 1.0 / float(v)
+            else:
+                # Plain numeric search parameter.
+                if p in col_idx:
+                    for vi, v in enumerate(vals):
+                        lut[vi, col_idx[p]] = float(v)
+            self._param_luts.append(lut)
+
+        # ---------- Fixed-param contribution (simd_unit_issue_width etc.) ----------
+        fixed_contrib = np.zeros(self.n_features, dtype=np.float32)
+        for p, v in FIXED_PARAMS.items():
+            if p in col_idx:
+                fixed_contrib[col_idx[p]] = float(v)
+        self._fixed_contrib = fixed_contrib
+
+        # Precompute column indices we need fast access to.
+        self._l1i_col = PARAM_COL_IDX["l1i_size"]
+        self._l1d_col = PARAM_COL_IDX["l1d_size"]
+        self._l2_col = PARAM_COL_IDX["l2_size"]
+        self._bp_col = PARAM_COL_IDX["branch_predictor"]
+
+        # Mean/scale for inline z-scoring.
+        self._mean = mean
+        self._scale = scale
+
+    def transform(self, indices: np.ndarray) -> np.ndarray:
+        """Assemble scaled features for ``indices`` (shape: n_cfgs, n_params).
+
+        Returns a ``(n_cfgs * n_bundles, n_features)`` float32 array, cfg-major.
+        """
+        if indices.ndim != 2:
+            raise ValueError(f"indices must be 2D, got shape {indices.shape}")
+        n_cfgs = indices.shape[0]
+        if n_cfgs == 0:
+            return np.empty((0, self.n_features), dtype=np.float32)
+
+        # Config-dependent row: sum each param's LUT contribution + fixed params.
+        cfg_rows = np.broadcast_to(self._fixed_contrib, (n_cfgs, self.n_features)).copy()
+        for j, lut in enumerate(self._param_luts):
+            cfg_rows += lut[indices[:, j]]
+
+        # Gather bundle-dependent rows keyed by (l1i, l1d, l2, bp) for each cfg.
+        l1i_i = indices[:, self._l1i_col]
+        l1d_i = indices[:, self._l1d_col]
+        l2_i = indices[:, self._l2_col]
+        bp_i = indices[:, self._bp_col]
+        # Shape: (n_cfgs, n_bundles, n_features).
+        bundle_rows = self._bundle_feats[l1i_i, l1d_i, l2_i, :, bp_i, :]
+
+        # Broadcast cfg_rows over the bundle axis and sum in the bundle rows.
+        out = bundle_rows + cfg_rows[:, None, :]
+        out = out.reshape(n_cfgs * self.n_bundles, self.n_features)
+        out -= self._mean
+        out /= self._scale
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -460,50 +549,94 @@ def resolve_artifact_paths(checkpoint_dir: Path) -> tuple[Path, Path]:
     return ckpt, scl
 
 
-def evaluate_configs(
+@dataclass
+class EvalTimings:
+    """Cumulative timers capturing where model-evaluation time is spent."""
+    feature_build_s: float = 0.0
+    model_forward_s: float = 0.0
+    cost_s: float = 0.0
+    n_cfgs_evaluated: int = 0
+    n_model_calls: int = 0
+
+    def add(self, other: "EvalTimings") -> None:
+        self.feature_build_s += other.feature_build_s
+        self.model_forward_s += other.model_forward_s
+        self.cost_s += other.cost_s
+        self.n_cfgs_evaluated += other.n_cfgs_evaluated
+        self.n_model_calls += other.n_model_calls
+
+    def report(self, prefix: str) -> str:
+        return (
+            f"{prefix} features={self.feature_build_s:.2f}s "
+            f"model={self.model_forward_s:.2f}s "
+            f"cost={self.cost_s:.2f}s "
+            f"cfgs={self.n_cfgs_evaluated} calls={self.n_model_calls}"
+        )
+
+
+def evaluate_cpis_from_indices(
+    indices: np.ndarray,
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
-    cfgs: list[dict[str, Any]],
-    scaler: StandardScaler,
+    builder: "FeatureBuilder",
     device: str,
-) -> list[float]:
-    """Mean CPI across traces, per HW config."""
-    features = build_scaled_features(bundles, cfgs, scaler)
-    x = torch.from_numpy(features.to_numpy(copy=True)).float().to(device)
+    timings: EvalTimings | None = None,
+) -> np.ndarray:
+    """Mean CPI across traces for each row of ``indices``."""
+    t0 = time.perf_counter()
+    features = builder.transform(indices)
+    t1 = time.perf_counter()
+    x = torch.from_numpy(features).to(device)
     with torch.no_grad():
-        y = model(x).reshape(len(cfgs), len(bundles))
+        y = model(x).reshape(indices.shape[0], builder.n_bundles)
         mean_per_cfg = y.mean(dim=1)
     torch_xla.sync()
-    return mean_per_cfg.detach().float().cpu().tolist()
+    out = mean_per_cfg.detach().float().cpu().numpy().astype(np.float64)
+    t2 = time.perf_counter()
+    if timings is not None:
+        timings.feature_build_s += (t1 - t0)
+        timings.model_forward_s += (t2 - t1)
+        timings.n_cfgs_evaluated += int(indices.shape[0])
+        timings.n_model_calls += 1
+    return out
 
 
-def evaluate_cpi_batched(
+def evaluate_configs(
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
+    builder: "FeatureBuilder",
     cfgs: list[dict[str, Any]],
-    scaler: StandardScaler,
     device: str,
-    batch_size: int,
-) -> np.ndarray:
-    """Mean CPI per config, processed in fixed-size chunks."""
-    out: list[float] = []
-    for i in range(0, len(cfgs), batch_size):
-        out.extend(evaluate_configs(model, bundles, cfgs[i : i + batch_size], scaler, device))
-    return np.asarray(out, dtype=np.float64)
+    timings: EvalTimings | None = None,
+) -> list[float]:
+    """Mean CPI across traces, per HW config."""
+    if not cfgs:
+        return []
+    indices = np.stack([encode_cfg(cfg) for cfg in cfgs], axis=0)
+    return evaluate_cpis_from_indices(indices, model, builder, device, timings).tolist()
 
 
 def evaluate_indices(
     indices: np.ndarray,
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
-    scaler: StandardScaler,
+    builder: "FeatureBuilder",
     device: str,
     batch_size: int,
+    timings: EvalTimings | None = None,
 ) -> np.ndarray:
     """Objective matrix for a batch of encoded configs. Returns (N, 2) of (CPI, cost)."""
+    n = indices.shape[0]
+    if n == 0:
+        return np.empty((0, 2), dtype=np.float64)
+
+    cpis = np.empty(n, dtype=np.float64)
+    for i in range(0, n, batch_size):
+        j = min(i + batch_size, n)
+        cpis[i:j] = evaluate_cpis_from_indices(indices[i:j], model, builder, device, timings)
+
+    t_cost = time.perf_counter()
     cfgs = decode_indices(indices)
-    cpis = evaluate_cpi_batched(model, bundles, cfgs, scaler, device, batch_size)
     costs = np.asarray(hardware_cost(cfgs), dtype=np.float64)
+    if timings is not None:
+        timings.cost_s += (time.perf_counter() - t_cost)
     return np.stack([cpis, costs], axis=1)
 
 
@@ -617,15 +750,16 @@ def _extract_fronts_until(F: np.ndarray, n_target: int) -> list[np.ndarray]:
 def stage2_global_sample(
     n_samples: int,
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
-    scaler: StandardScaler,
+    builder: FeatureBuilder,
     device: str,
     rng: np.random.Generator,
     batch_size: int,
     near_pareto_frac: float,
 ) -> dict[str, Any]:
     """Stage 2: sample → filter → evaluate → extract seed population."""
+    stage_t0 = time.perf_counter()
     print(f"[Stage 2] LHS sampling {n_samples} candidates over {N_SEARCH_PARAMS} parameters")
+    t0 = time.perf_counter()
     X = lhs_sample(n_samples, rng)
     n_raw = X.shape[0]
 
@@ -646,19 +780,23 @@ def stage2_global_sample(
     n_valid = X.shape[0]
     X = dedup_rows(X)
     n_unique = X.shape[0]
-    print(f"[Stage 2] {n_raw} drawn → {n_valid} repaired → {n_unique} unique after dedup")
+    sample_s = time.perf_counter() - t0
+    print(f"[Stage 2] {n_raw} drawn → {n_valid} repaired → {n_unique} unique after dedup ({sample_s:.2f}s)")
 
     if n_unique == 0:
         raise RuntimeError("Stage 2 produced no valid configurations; loosen constraints or raise --lhs-samples")
 
+    timings = EvalTimings()
     t0 = time.perf_counter()
-    F = evaluate_indices(X, model, bundles, scaler, device, batch_size)
-    print(f"[Stage 2] Evaluated {n_unique} configs in {time.perf_counter() - t0:.1f}s")
+    F = evaluate_indices(X, model, builder, device, batch_size, timings)
+    eval_s = time.perf_counter() - t0
+    print(f"[Stage 2] Evaluated {n_unique} configs in {eval_s:.2f}s "
+          f"(features={timings.feature_build_s:.2f}s model={timings.model_forward_s:.2f}s "
+          f"cost={timings.cost_s:.2f}s calls={timings.n_model_calls})")
 
+    t0 = time.perf_counter()
     nds = NonDominatedSorting()
     pareto_rows = nds.do(F, only_non_dominated_front=True)
-    print(f"[Stage 2] Initial Pareto front: {len(pareto_rows)} points")
-
     # Near-Pareto inclusion: peel successive non-dominated layers until we have
     # at least ``near_pareto_frac`` of the evaluated population. Preserves
     # genetic diversity for Stage 3 while still biasing toward the frontier.
@@ -667,7 +805,10 @@ def stage2_global_sample(
     seed_rows = np.concatenate(layers, axis=0)
     seed_X = X[seed_rows]
     seed_F = F[seed_rows]
-    print(f"[Stage 2] Seed population (Pareto + near-Pareto): {len(seed_X)} points")
+    sort_s = time.perf_counter() - t0
+    print(f"[Stage 2] Initial Pareto front: {len(pareto_rows)} points; "
+          f"seed population (Pareto + near-Pareto): {len(seed_X)} points ({sort_s:.2f}s)")
+    print(f"[Stage 2] Total: {time.perf_counter() - stage_t0:.2f}s")
 
     return {
         "seed_X": seed_X,
@@ -682,6 +823,11 @@ def stage2_global_sample(
             "n_unique_lhs": int(n_unique),
             "n_pareto_lhs": int(len(pareto_rows)),
             "n_seed": int(len(seed_X)),
+            "sample_s": round(sample_s, 2),
+            "eval_s": round(eval_s, 2),
+            "sort_s": round(sort_s, 2),
+            "feature_build_s": round(timings.feature_build_s, 2),
+            "model_forward_s": round(timings.model_forward_s, 2),
         },
     }
 
@@ -805,7 +951,7 @@ class HWConfigProblem(Problem):
 
     def __init__(
         self,
-        eval_fn: Callable[[np.ndarray], np.ndarray],
+        eval_fn: Callable[[np.ndarray], np.ndarray] | None,
     ) -> None:
         super().__init__(
             n_var=N_SEARCH_PARAMS,
@@ -847,8 +993,7 @@ def _prepare_bifurcation_seed(
 def stage3_nsga2(
     seed_X: np.ndarray,
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
-    scaler: StandardScaler,
+    builder: FeatureBuilder,
     device: str,
     pop_size: int,
     n_generations: int,
@@ -857,13 +1002,12 @@ def stage3_nsga2(
     verbose: bool,
 ) -> dict[str, Any]:
     """Stage 3: bifurcated NSGA-II (one run per branch_predictor value)."""
-
-    eval_fn = lambda X_int: evaluate_indices(X_int, model, bundles, scaler, device, batch_size)  # noqa: E731
+    stage_t0 = time.perf_counter()
 
     mutation_prob = 1.0 / N_SEARCH_PARAMS
     archive_X: list[np.ndarray] = []
     archive_F: list[np.ndarray] = []
-    per_bp_stats: dict[str, dict[str, int]] = {}
+    per_bp_stats: dict[str, dict[str, Any]] = {}
 
     for bp_name in PARAM_VALUES["branch_predictor"]:
         bp_idx = PARAM_VALUES["branch_predictor"].index(bp_name)
@@ -871,7 +1015,11 @@ def stage3_nsga2(
         seed = _prepare_bifurcation_seed(seed_X, bp_idx, pop_size, rng)
 
         repair = HWRepair(bp_fixed_idx=bp_idx)
-        problem = HWConfigProblem(eval_fn=eval_fn)
+        problem = HWConfigProblem(eval_fn=None)  # attached below so we can capture timings
+        bp_timings = EvalTimings()
+        problem._eval_fn = lambda X_int, _t=bp_timings: evaluate_indices(  # noqa: E731
+            X_int, model, builder, device, batch_size, _t
+        )
         algorithm = NSGA2(
             pop_size=pop_size,
             sampling=seed.astype(float),
@@ -893,14 +1041,25 @@ def stage3_nsga2(
         bp_F = np.concatenate(problem.archive_F, axis=0) if problem.archive_F else np.empty((0, 2), dtype=np.float64)
         archive_X.append(bp_X)
         archive_F.append(bp_F)
+        ga_overhead_s = max(0.0, dur - bp_timings.feature_build_s - bp_timings.model_forward_s - bp_timings.cost_s)
         per_bp_stats[bp_name] = {
             "n_evaluated": int(len(bp_X)),
             "n_generations": int(n_generations),
             "pop_size": int(pop_size),
-            "duration_s": round(dur, 1),
+            "duration_s": round(dur, 2),
+            "feature_build_s": round(bp_timings.feature_build_s, 2),
+            "model_forward_s": round(bp_timings.model_forward_s, 2),
+            "cost_s": round(bp_timings.cost_s, 2),
+            "ga_overhead_s": round(ga_overhead_s, 2),
+            "n_model_calls": bp_timings.n_model_calls,
         }
-        print(f"[Stage 3] {bp_name!r} evaluated {len(bp_X)} configs in {dur:.1f}s")
+        print(
+            f"[Stage 3] {bp_name!r} evaluated {len(bp_X)} configs in {dur:.2f}s "
+            f"(features={bp_timings.feature_build_s:.2f}s model={bp_timings.model_forward_s:.2f}s "
+            f"cost={bp_timings.cost_s:.2f}s ga={ga_overhead_s:.2f}s calls={bp_timings.n_model_calls})"
+        )
 
+    print(f"[Stage 3] Total: {time.perf_counter() - stage_t0:.2f}s")
     return {
         "archive_X": np.concatenate(archive_X, axis=0),
         "archive_F": np.concatenate(archive_F, axis=0),
@@ -937,8 +1096,7 @@ def compute_sensitivity(
     pareto_X: np.ndarray,
     pareto_F: np.ndarray,
     model: PeregrineMLModel,
-    bundles: list[TraceBundle],
-    scaler: StandardScaler,
+    builder: FeatureBuilder,
     device: str,
     batch_size: int,
 ) -> list[dict[str, dict[str, float]]]:
@@ -968,7 +1126,7 @@ def compute_sensitivity(
         return [{} for _ in range(len(pareto_X))]
 
     perturb_X = np.stack(perturb_rows, axis=0)
-    F_pert = evaluate_indices(perturb_X, model, bundles, scaler, device, batch_size)
+    F_pert = evaluate_indices(perturb_X, model, builder, device, batch_size)
 
     buckets: list[dict[str, dict[str, list[float]]]] = [
         {p: {"dcpi": [], "dcost": []} for p in SEARCH_PARAM_ORDER}
@@ -1085,30 +1243,43 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
+    total_t0 = time.perf_counter()
 
+    t0 = time.perf_counter()
     ckpt_path, scaler_path = resolve_artifact_paths(args.checkpoint)
     bundles = [load_trace_bundle(p) for p in discover_trace_dirs(args.traces_dir)]
-    print(f"Loaded {len(bundles)} trace bundle(s)")
+    print(f"Loaded {len(bundles)} trace bundle(s) ({time.perf_counter() - t0:.2f}s)")
 
+    t0 = time.perf_counter()
     scaler: StandardScaler = joblib.load(scaler_path)
     if not hasattr(scaler, "feature_names_in_"):
         raise ValueError("Scaler must have been fit with a pandas DataFrame (feature_names_in_).")
     n_features = len(scaler.feature_names_in_)
+    print(f"Loaded scaler ({n_features} features, {time.perf_counter() - t0:.2f}s)")
 
+    t0 = time.perf_counter()
+    builder = FeatureBuilder(bundles, scaler)
+    print(f"Built feature LUTs ({time.perf_counter() - t0:.2f}s)")
+
+    t0 = time.perf_counter()
     device = "xla"
     model = load_model(ckpt_path, input_size=n_features, device=device)
+    print(f"Loaded model on {device!r} ({time.perf_counter() - t0:.2f}s)")
 
     # Warm up XLA compilation with a single baseline config.
-    default_cpi = evaluate_configs(model, bundles, [dict(DEFAULT_CONFIG)], scaler, device)
+    t0 = time.perf_counter()
+    default_cpi = evaluate_configs(model, builder, [dict(DEFAULT_CONFIG)], device)
     default_cost = hardware_cost([DEFAULT_CONFIG])[0]
-    print(f"Baseline config: predicted CPI={default_cpi[0]:.4f}, cost={default_cost:.2f}")
+    print(
+        f"Baseline config: predicted CPI={default_cpi[0]:.4f}, cost={default_cost:.2f} "
+        f"(warmup {time.perf_counter() - t0:.2f}s)"
+    )
 
     # -------------------- Stage 2 --------------------
     stage2 = stage2_global_sample(
         n_samples=args.lhs_samples,
         model=model,
-        bundles=bundles,
-        scaler=scaler,
+        builder=builder,
         device=device,
         rng=rng,
         batch_size=args.batch_size,
@@ -1119,8 +1290,7 @@ def main() -> None:
     stage3 = stage3_nsga2(
         seed_X=stage2["seed_X"],
         model=model,
-        bundles=bundles,
-        scaler=scaler,
+        builder=builder,
         device=device,
         pop_size=args.nsga_pop_size,
         n_generations=args.nsga_generations,
@@ -1130,6 +1300,8 @@ def main() -> None:
     )
 
     # -------------------- Stage 4 --------------------
+    stage4_t0 = time.perf_counter()
+    t0 = time.perf_counter()
     full_X = merge_archive(stage2["archive_X"], stage3["archive_X"])
     full_F = merge_archive(stage2["archive_F"], stage3["archive_F"])
     pareto_X, pareto_F = final_pareto(full_X, full_F)
@@ -1137,17 +1309,23 @@ def main() -> None:
     order = np.argsort(pareto_F[:, 1])
     pareto_X = pareto_X[order]
     pareto_F = pareto_F[order]
-    print(f"[Stage 4] Final Pareto front: {len(pareto_X)} points (from archive of {len(full_X)})")
+    print(
+        f"[Stage 4] Final Pareto front: {len(pareto_X)} points "
+        f"(from archive of {len(full_X)}, {time.perf_counter() - t0:.2f}s)"
+    )
 
     if args.skip_sensitivity:
         sensitivities: list[dict[str, dict[str, float]]] = [{} for _ in range(len(pareto_X))]
     else:
+        t0 = time.perf_counter()
         print("[Stage 4] Computing per-parameter sensitivity")
         sensitivities = compute_sensitivity(
-            pareto_X, pareto_F, model, bundles, scaler, device, args.batch_size
+            pareto_X, pareto_F, model, builder, device, args.batch_size
         )
+        print(f"[Stage 4] Sensitivity computed in {time.perf_counter() - t0:.2f}s")
 
     flags = flag_validation_candidates(pareto_F, k=args.validation_k)
+    print(f"[Stage 4] Total: {time.perf_counter() - stage4_t0:.2f}s")
 
     stats = {
         "stage2": stage2["stats"],
@@ -1155,6 +1333,7 @@ def main() -> None:
         "n_archive_total": int(len(full_X)),
         "n_pareto_final": int(len(pareto_X)),
         "n_validation_candidates": int(int(flags.sum())),
+        "total_duration_s": round(time.perf_counter() - total_t0, 2),
     }
     output = build_output(pareto_X, pareto_F, sensitivities, flags, stats)
 
@@ -1162,6 +1341,7 @@ def main() -> None:
     args.output.write_text(json.dumps(output, indent=2))
     print_tradeoff_table(output["pareto_front"])
     print(f"\nWrote {len(output['pareto_front'])} Pareto points to {args.output}")
+    print(f"Total runtime: {time.perf_counter() - total_t0:.2f}s")
 
 
 if __name__ == "__main__":
