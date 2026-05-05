@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-Cost model + CPI evaluation for a Peregrine O3CPU hardware configuration.
+Pareto-optimal hardware configuration search for Peregrine O3CPU.
+
+Jointly minimizes predicted CPI (via the ML model) and hardware cost (via the
+cost model) over the discrete/categorical parameter grid. The search proceeds
+in four sequential stages:
+  1. Constraint pruning over an integer-encoded parameter space.
+  2. Latin Hypercube global sampling + batched model/cost evaluation.
+  3. NSGA-II evolutionary refinement, bifurcated on `branch_predictor`.
+  4. Archive-wide Pareto extraction, decoding, sensitivity annotation, and
+     validation-candidate flagging.
 
 Feature preprocessing reuses ``train.pre_process_features`` so the rows seen
 by the model here match exactly what the model was trained on.
@@ -12,24 +21,38 @@ Requires the Neuron PyTorch venv:
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 import torch
 import torch_xla
+from scipy.stats import qmc
 from sklearn.preprocessing import StandardScaler
 import joblib
+
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.core.problem import Problem
+from pymoo.core.repair import Repair
+from pymoo.operators.crossover.sbx import SBX
+from pymoo.operators.mutation.pm import PM
+from pymoo.operators.sampling.rnd import IntegerRandomSampling
+from pymoo.optimize import minimize
+from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 from model import PeregrineMLModel
 from train import pre_process_features
 
-BATCH_CONFIGS = 1
+# ---------------------------------------------------------------------------
+# Parameterization Grid & Default Parameter Config
+# ---------------------------------------------------------------------------
 
-PARAM_VALUES = {
+PARAM_VALUES: dict[str, list[Any]] = {
     "int_reg_issue_width": list(range(1, 8 + 1)),
     "int_mult_div_issue_width": list(range(1, 8 + 1)),
     "fp_reg_issue_width": list(range(1, 8 + 1)),
@@ -74,6 +97,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_icache_fills": 4,
     "stride_prefetcher_degree": 4,
 }
+
+# ---------------------------------------------------------------------------
+# Config Embedding & Decoding Keys
+# ---------------------------------------------------------------------------
+
+# Parameters held at a constant value and injected at decode time rather than
+# searched over.
+FIXED_PARAMS: dict[str, Any] = {"simd_unit_issue_width": 1}
+
+# Ordered list of parameters participating in the search + lookup helpers.
+SEARCH_PARAM_ORDER: list[str] = [p for p in PARAM_VALUES if p not in FIXED_PARAMS]
+PARAM_N_VALUES: np.ndarray = np.array(
+    [len(PARAM_VALUES[p]) for p in SEARCH_PARAM_ORDER], dtype=np.int64
+)
+PARAM_COL_IDX: dict[str, int] = {p: i for i, p in enumerate(SEARCH_PARAM_ORDER)}
+N_SEARCH_PARAMS: int = len(SEARCH_PARAM_ORDER)
+
+# ---------------------------------------------------------------------------
+# Parameter Validity Constraint Constants
+# ---------------------------------------------------------------------------
+
+# ROB must hold at least ROB_HEADROOM cycles' worth of in-flight instructions
+# relative to commit bandwidth. Structural stalls dominate otherwise.
+ROB_HEADROOM = 8
+# Total issue width across FU types must not wildly exceed rename bandwidth.
+ISSUE_WIDTH_RENAME_RATIO = 2.0
 
 # ---------------------------------------------------------------------------
 # Cost model
@@ -428,23 +477,618 @@ def evaluate_configs(
     return mean_per_cfg.detach().float().cpu().tolist()
 
 
+def evaluate_cpi_batched(
+    model: PeregrineMLModel,
+    bundles: list[TraceBundle],
+    cfgs: list[dict[str, Any]],
+    scaler: StandardScaler,
+    device: str,
+    batch_size: int,
+) -> np.ndarray:
+    """Mean CPI per config, processed in fixed-size chunks."""
+    out: list[float] = []
+    for i in range(0, len(cfgs), batch_size):
+        out.extend(evaluate_configs(model, bundles, cfgs[i : i + batch_size], scaler, device))
+    return np.asarray(out, dtype=np.float64)
+
+
+def evaluate_indices(
+    indices: np.ndarray,
+    model: PeregrineMLModel,
+    bundles: list[TraceBundle],
+    scaler: StandardScaler,
+    device: str,
+    batch_size: int,
+) -> np.ndarray:
+    """Objective matrix for a batch of encoded configs. Returns (N, 2) of (CPI, cost)."""
+    cfgs = decode_indices(indices)
+    cpis = evaluate_cpi_batched(model, bundles, cfgs, scaler, device, batch_size)
+    costs = np.asarray(hardware_cost(cfgs), dtype=np.float64)
+    return np.stack([cpis, costs], axis=1)
+
+
 # ---------------------------------------------------------------------------
-# Entry point: evaluate a single config (default) as a sanity check.
+# Stage 1: encoding + validity predicate
+# ---------------------------------------------------------------------------
+
+def encode_cfg(cfg: dict[str, Any]) -> np.ndarray:
+    idx = np.empty(N_SEARCH_PARAMS, dtype=np.int64)
+    for i, p in enumerate(SEARCH_PARAM_ORDER):
+        idx[i] = PARAM_VALUES[p].index(cfg[p])
+    return idx
+
+
+def decode_indices(indices: np.ndarray) -> list[dict[str, Any]]:
+    if indices.ndim != 2:
+        raise ValueError(f"indices must be 2D, got shape {indices.shape}")
+    cfgs: list[dict[str, Any]] = []
+    for row in indices:
+        cfg: dict[str, Any] = dict(FIXED_PARAMS)
+        for i, p in enumerate(SEARCH_PARAM_ORDER):
+            cfg[p] = PARAM_VALUES[p][int(row[i])]
+        cfgs.append(cfg)
+    return cfgs
+
+
+def _param_int_values(param: str) -> np.ndarray:
+    vals = PARAM_VALUES[param]
+    if not all(isinstance(v, int) for v in vals):
+        raise ValueError(f"Param {param} is not integer-valued")
+    return np.array(vals, dtype=np.int64)
+
+
+def _vals_for(indices: np.ndarray, param: str) -> np.ndarray:
+    """Decoded integer values for `param` over all rows in `indices`."""
+    return _param_int_values(param)[indices[:, PARAM_COL_IDX[param]]]
+
+
+def is_valid(indices: np.ndarray) -> np.ndarray:
+    """Vectorized validity check over (N, n_params) integer-index batch."""
+    if indices.ndim != 2:
+        raise ValueError(f"indices must be 2D, got shape {indices.shape}")
+
+    fetch = _vals_for(indices, "fetch_width")
+    decode = _vals_for(indices, "decode_width")
+    rename = _vals_for(indices, "rename_width")
+    commit = _vals_for(indices, "commit_width")
+    rob = _vals_for(indices, "rob_size")
+    lq = _vals_for(indices, "lq_entries")
+    sq = _vals_for(indices, "sq_entries")
+    rp = _vals_for(indices, "read_port_issue_width")
+    rw = _vals_for(indices, "rdwr_port_issue_width")
+    ir = _vals_for(indices, "int_reg_issue_width")
+    im = _vals_for(indices, "int_mult_div_issue_width")
+    fr = _vals_for(indices, "fp_reg_issue_width")
+    fm = _vals_for(indices, "fp_mult_div_issue_width")
+
+    mem_ports = rp + rw
+    total_issue = ir + im + fr + fm + rp + rw
+
+    return (
+        (decode <= fetch)
+        & (rename <= decode)
+        & (commit <= rename)
+        & (rob >= ROB_HEADROOM * commit)
+        & (lq >= mem_ports)
+        & (sq >= mem_ports)
+        & (total_issue <= ISSUE_WIDTH_RENAME_RATIO * rename)
+    )
+
+
+def dedup_rows(X: np.ndarray) -> np.ndarray:
+    if X.shape[0] == 0:
+        return X
+    return np.unique(X, axis=0)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: LHS global sampling
+# ---------------------------------------------------------------------------
+
+def lhs_sample(n_samples: int, rng: np.random.Generator) -> np.ndarray:
+    """Latin Hypercube draw snapped to the discrete parameter grid."""
+    sampler = qmc.LatinHypercube(d=N_SEARCH_PARAMS, seed=rng)
+    u = sampler.random(n_samples)  # (n_samples, d) in [0, 1)
+    indices = np.floor(u * PARAM_N_VALUES).astype(np.int64)
+    # Guard against the (vanishingly rare) case of u == 1.0 after rounding.
+    indices = np.minimum(indices, PARAM_N_VALUES - 1)
+    return indices
+
+
+def _extract_fronts_until(F: np.ndarray, n_target: int) -> list[np.ndarray]:
+    """Return a list of row-index arrays forming successive non-dominated fronts
+    until we have collected at least ``n_target`` rows."""
+    nds = NonDominatedSorting()
+    n = F.shape[0]
+    remaining = np.arange(n)
+    layers: list[np.ndarray] = []
+    collected = 0
+    while collected < n_target and remaining.size > 0:
+        front = nds.do(F[remaining], only_non_dominated_front=True)
+        layer = remaining[front]
+        layers.append(layer)
+        collected += layer.size
+        mask = np.ones(remaining.size, dtype=bool)
+        mask[front] = False
+        remaining = remaining[mask]
+    return layers
+
+
+def stage2_global_sample(
+    n_samples: int,
+    model: PeregrineMLModel,
+    bundles: list[TraceBundle],
+    scaler: StandardScaler,
+    device: str,
+    rng: np.random.Generator,
+    batch_size: int,
+    near_pareto_frac: float,
+) -> dict[str, Any]:
+    """Stage 2: sample → filter → evaluate → extract seed population."""
+    print(f"[Stage 2] LHS sampling {n_samples} candidates over {N_SEARCH_PARAMS} parameters")
+    X = lhs_sample(n_samples, rng)
+    n_raw = X.shape[0]
+
+    # Raw LHS draws only satisfy the constraint predicate rarely (<1%), so
+    # repair every draw to the nearest valid index vector. Done per-BP so the
+    # repair operator (which pins branch_predictor) preserves the LHS
+    # sampling distribution over that axis.
+    bp_col = PARAM_COL_IDX["branch_predictor"]
+    repaired_parts: list[np.ndarray] = []
+    for bp_idx in range(len(PARAM_VALUES["branch_predictor"])):
+        mask = X[:, bp_col] == bp_idx
+        if not mask.any():
+            continue
+        repaired_parts.append(
+            HWRepair(bp_fixed_idx=bp_idx)._do(None, X[mask].astype(float))
+        )
+    X = np.concatenate(repaired_parts, axis=0) if repaired_parts else X[:0]
+    n_valid = X.shape[0]
+    X = dedup_rows(X)
+    n_unique = X.shape[0]
+    print(f"[Stage 2] {n_raw} drawn → {n_valid} repaired → {n_unique} unique after dedup")
+
+    if n_unique == 0:
+        raise RuntimeError("Stage 2 produced no valid configurations; loosen constraints or raise --lhs-samples")
+
+    t0 = time.perf_counter()
+    F = evaluate_indices(X, model, bundles, scaler, device, batch_size)
+    print(f"[Stage 2] Evaluated {n_unique} configs in {time.perf_counter() - t0:.1f}s")
+
+    nds = NonDominatedSorting()
+    pareto_rows = nds.do(F, only_non_dominated_front=True)
+    print(f"[Stage 2] Initial Pareto front: {len(pareto_rows)} points")
+
+    # Near-Pareto inclusion: peel successive non-dominated layers until we have
+    # at least ``near_pareto_frac`` of the evaluated population. Preserves
+    # genetic diversity for Stage 3 while still biasing toward the frontier.
+    n_near_target = max(len(pareto_rows), int(n_unique * near_pareto_frac))
+    layers = _extract_fronts_until(F, n_near_target)
+    seed_rows = np.concatenate(layers, axis=0)
+    seed_X = X[seed_rows]
+    seed_F = F[seed_rows]
+    print(f"[Stage 2] Seed population (Pareto + near-Pareto): {len(seed_X)} points")
+
+    return {
+        "seed_X": seed_X,
+        "seed_F": seed_F,
+        "archive_X": X,
+        "archive_F": F,
+        "pareto_X": X[pareto_rows],
+        "pareto_F": F[pareto_rows],
+        "stats": {
+            "n_samples_lhs": int(n_raw),
+            "n_valid_lhs": int(n_valid),
+            "n_unique_lhs": int(n_unique),
+            "n_pareto_lhs": int(len(pareto_rows)),
+            "n_seed": int(len(seed_X)),
+        },
+    }
+
+
+def random_valid_configs(
+    n: int, rng: np.random.Generator, fix_bp_idx: int | None = None
+) -> np.ndarray:
+    """Draw ``n`` valid configs by LHS + repair. Optionally fixes the BP index."""
+    X = lhs_sample(n, rng).astype(float)
+    bp_idx = fix_bp_idx if fix_bp_idx is not None else 0
+    repaired = HWRepair(bp_fixed_idx=bp_idx)._do(None, X)
+    if fix_bp_idx is None:
+        # HWRepair pins the BP column, so re-diversify when the caller didn't
+        # explicitly ask for a fixed predictor.
+        repaired[:, PARAM_COL_IDX["branch_predictor"]] = rng.integers(
+            0, len(PARAM_VALUES["branch_predictor"]), size=len(repaired)
+        )
+    # Final safety check — repair is exhaustive, but guard against regressions.
+    if not is_valid(repaired).all():
+        raise RuntimeError("random_valid_configs produced invalid rows after repair")
+    return repaired
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: NSGA-II refinement
+# ---------------------------------------------------------------------------
+
+class HWRepair(Repair):
+    """Round floats to ints, fix branch_predictor to the bifurcation value, and
+    clamp pipeline/queue parameters so the constraint predicate holds."""
+
+    def __init__(self, bp_fixed_idx: int) -> None:
+        super().__init__()
+        self.bp_fixed_idx = bp_fixed_idx
+
+    def _do(self, problem: Problem, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+        X = np.round(X).astype(np.int64)
+        # Clamp to per-parameter bounds.
+        X = np.minimum(np.maximum(X, 0), (PARAM_N_VALUES - 1).reshape(1, -1))
+        # Pin branch predictor for this bifurcation.
+        X[:, PARAM_COL_IDX["branch_predictor"]] = self.bp_fixed_idx
+
+        # Ensure fetch/decode/rename are high enough to satisfy the eventual
+        # issue-width coherence constraint (total_issue ≤ ratio * rename).
+        # Applied before ordering so the clamp below can't silently violate it.
+        fetch_col = PARAM_COL_IDX["fetch_width"]
+        decode_col = PARAM_COL_IDX["decode_width"]
+        rename_col = PARAM_COL_IDX["rename_width"]
+        commit_col = PARAM_COL_IDX["commit_width"]
+        fu_cols = [
+            PARAM_COL_IDX[p]
+            for p in (
+                "int_reg_issue_width",
+                "int_mult_div_issue_width",
+                "fp_reg_issue_width",
+                "fp_mult_div_issue_width",
+                "read_port_issue_width",
+                "rdwr_port_issue_width",
+            )
+        ]
+        min_rename_val = int(np.ceil(len(fu_cols) / ISSUE_WIDTH_RENAME_RATIO))
+        rename_grid = _param_int_values("rename_width")
+        min_rename_idx = int(np.searchsorted(rename_grid, min_rename_val))
+        min_rename_idx = min(min_rename_idx, len(rename_grid) - 1)
+        X[:, fetch_col] = np.maximum(X[:, fetch_col], min_rename_idx)
+        X[:, decode_col] = np.maximum(X[:, decode_col], min_rename_idx)
+        X[:, rename_col] = np.maximum(X[:, rename_col], min_rename_idx)
+
+        # Pipeline width ordering: commit ≤ rename ≤ decode ≤ fetch.
+        # Since fetch/decode/rename/commit share identical integer ranges
+        # (1..12), clamping by index preserves the constraint.
+        X[:, decode_col] = np.minimum(X[:, decode_col], X[:, fetch_col])
+        X[:, rename_col] = np.minimum(X[:, rename_col], X[:, decode_col])
+        X[:, commit_col] = np.minimum(X[:, commit_col], X[:, rename_col])
+
+        # ROB sizing: rob_value ≥ ROB_HEADROOM * commit_value. rob index i maps
+        # to value i+1 for our grid, so min index is (min_value - 1).
+        commit_vals = _param_int_values("commit_width")[X[:, commit_col]]
+        rob_vals = _param_int_values("rob_size")
+        rob_col = PARAM_COL_IDX["rob_size"]
+        rob_min_idx = np.clip(ROB_HEADROOM * commit_vals - 1, 0, len(rob_vals) - 1)
+        X[:, rob_col] = np.maximum(X[:, rob_col], rob_min_idx)
+
+        # Issue-width coherence: trim the largest FU widths until the total
+        # fits within ISSUE_WIDTH_RENAME_RATIO * rename. Done before LSQ
+        # balance since mem-port FU counts factor into the LSQ bound. FU
+        # indices map to values idx+1 (all FU grids start at 1); total issue
+        # = sum(indices) + len(fu_cols).
+        rename_vals = _param_int_values("rename_width")[X[:, rename_col]]
+        budget = np.floor(ISSUE_WIDTH_RENAME_RATIO * rename_vals).astype(np.int64)
+        fu_sub = X[:, fu_cols]
+        for _ in range(fu_sub.shape[1] * 8):  # bounded — each pass reduces sum by 1 per row
+            over = (fu_sub.sum(axis=1) + len(fu_cols)) - budget
+            mask = over > 0
+            if not mask.any():
+                break
+            rows = np.nonzero(mask)[0]
+            argmax = np.argmax(fu_sub[rows], axis=1)
+            fu_sub[rows, argmax] = np.maximum(fu_sub[rows, argmax] - 1, 0)
+        X[:, fu_cols] = fu_sub
+
+        # LSQ balance: lq / sq each ≥ (read_port + rdwr_port).
+        rp_col = PARAM_COL_IDX["read_port_issue_width"]
+        rw_col = PARAM_COL_IDX["rdwr_port_issue_width"]
+        rp_vals = _param_int_values("read_port_issue_width")[X[:, rp_col]]
+        rw_vals = _param_int_values("rdwr_port_issue_width")[X[:, rw_col]]
+        mem_ports = rp_vals + rw_vals
+        lq_col = PARAM_COL_IDX["lq_entries"]
+        sq_col = PARAM_COL_IDX["sq_entries"]
+        lq_n = len(_param_int_values("lq_entries"))
+        sq_n = len(_param_int_values("sq_entries"))
+        lq_min_idx = np.clip(mem_ports - 1, 0, lq_n - 1)
+        sq_min_idx = np.clip(mem_ports - 1, 0, sq_n - 1)
+        X[:, lq_col] = np.maximum(X[:, lq_col], lq_min_idx)
+        X[:, sq_col] = np.maximum(X[:, sq_col], sq_min_idx)
+        return X
+
+
+class HWConfigProblem(Problem):
+    """Two-objective (CPI, cost) minimization over the encoded parameter grid."""
+
+    def __init__(
+        self,
+        eval_fn: Callable[[np.ndarray], np.ndarray],
+    ) -> None:
+        super().__init__(
+            n_var=N_SEARCH_PARAMS,
+            n_obj=2,
+            xl=np.zeros(N_SEARCH_PARAMS, dtype=float),
+            xu=(PARAM_N_VALUES - 1).astype(float),
+            vtype=int,
+        )
+        self._eval_fn = eval_fn
+        self.archive_X: list[np.ndarray] = []
+        self.archive_F: list[np.ndarray] = []
+
+    def _evaluate(self, X: np.ndarray, out: dict[str, Any], *args: Any, **kwargs: Any) -> None:
+        X_int = np.round(X).astype(np.int64)
+        F = self._eval_fn(X_int)
+        out["F"] = F
+        self.archive_X.append(X_int.copy())
+        self.archive_F.append(F.copy())
+
+
+def _prepare_bifurcation_seed(
+    seed_X: np.ndarray, bp_idx: int, pop_size: int, rng: np.random.Generator
+) -> np.ndarray:
+    """Subset the Stage 2 seed to configs matching ``bp_idx`` and top up to
+    ``pop_size`` with fresh valid random draws if needed."""
+    bp_col = PARAM_COL_IDX["branch_predictor"]
+    mask = seed_X[:, bp_col] == bp_idx
+    sub = seed_X[mask]
+    if len(sub) > pop_size:
+        keep = rng.choice(len(sub), size=pop_size, replace=False)
+        sub = sub[keep]
+    elif len(sub) < pop_size:
+        needed = pop_size - len(sub)
+        extra = random_valid_configs(needed, rng, fix_bp_idx=bp_idx)
+        sub = np.concatenate([sub, extra], axis=0)
+    return sub.astype(np.int64)
+
+
+def stage3_nsga2(
+    seed_X: np.ndarray,
+    model: PeregrineMLModel,
+    bundles: list[TraceBundle],
+    scaler: StandardScaler,
+    device: str,
+    pop_size: int,
+    n_generations: int,
+    batch_size: int,
+    rng: np.random.Generator,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Stage 3: bifurcated NSGA-II (one run per branch_predictor value)."""
+
+    eval_fn = lambda X_int: evaluate_indices(X_int, model, bundles, scaler, device, batch_size)  # noqa: E731
+
+    mutation_prob = 1.0 / N_SEARCH_PARAMS
+    archive_X: list[np.ndarray] = []
+    archive_F: list[np.ndarray] = []
+    per_bp_stats: dict[str, dict[str, int]] = {}
+
+    for bp_name in PARAM_VALUES["branch_predictor"]:
+        bp_idx = PARAM_VALUES["branch_predictor"].index(bp_name)
+        print(f"[Stage 3] NSGA-II bifurcation: branch_predictor={bp_name!r}")
+        seed = _prepare_bifurcation_seed(seed_X, bp_idx, pop_size, rng)
+
+        repair = HWRepair(bp_fixed_idx=bp_idx)
+        problem = HWConfigProblem(eval_fn=eval_fn)
+        algorithm = NSGA2(
+            pop_size=pop_size,
+            sampling=seed.astype(float),
+            crossover=SBX(prob=0.9, eta=15, vtype=float, repair=repair),
+            mutation=PM(prob=mutation_prob, eta=20, vtype=float, repair=repair),
+            eliminate_duplicates=True,
+        )
+        t0 = time.perf_counter()
+        minimize(
+            problem,
+            algorithm,
+            ("n_gen", n_generations),
+            seed=int(rng.integers(0, 2**31 - 1)),
+            verbose=verbose,
+        )
+        dur = time.perf_counter() - t0
+
+        bp_X = np.concatenate(problem.archive_X, axis=0) if problem.archive_X else np.empty((0, N_SEARCH_PARAMS), dtype=np.int64)
+        bp_F = np.concatenate(problem.archive_F, axis=0) if problem.archive_F else np.empty((0, 2), dtype=np.float64)
+        archive_X.append(bp_X)
+        archive_F.append(bp_F)
+        per_bp_stats[bp_name] = {
+            "n_evaluated": int(len(bp_X)),
+            "n_generations": int(n_generations),
+            "pop_size": int(pop_size),
+            "duration_s": round(dur, 1),
+        }
+        print(f"[Stage 3] {bp_name!r} evaluated {len(bp_X)} configs in {dur:.1f}s")
+
+    return {
+        "archive_X": np.concatenate(archive_X, axis=0),
+        "archive_F": np.concatenate(archive_F, axis=0),
+        "stats": per_bp_stats,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: final Pareto extraction, sensitivity, validation flagging
+# ---------------------------------------------------------------------------
+
+def merge_archive(*archives_X: np.ndarray) -> np.ndarray:
+    return np.concatenate([a for a in archives_X if a.size > 0], axis=0)
+
+
+def final_pareto(archive_X: np.ndarray, archive_F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplicate the archive, drop any infeasible slip-throughs, and extract
+    the strict Pareto front."""
+    if archive_X.size == 0:
+        return archive_X, archive_F
+    _, keep = np.unique(archive_X, axis=0, return_index=True)
+    keep.sort()
+    X = archive_X[keep]
+    F = archive_F[keep]
+    valid = is_valid(X)
+    X = X[valid]
+    F = F[valid]
+    nds = NonDominatedSorting()
+    pareto_rows = nds.do(F, only_non_dominated_front=True)
+    return X[pareto_rows], F[pareto_rows]
+
+
+def compute_sensitivity(
+    pareto_X: np.ndarray,
+    pareto_F: np.ndarray,
+    model: PeregrineMLModel,
+    bundles: list[TraceBundle],
+    scaler: StandardScaler,
+    device: str,
+    batch_size: int,
+) -> list[dict[str, dict[str, float]]]:
+    """For each Pareto config and each searchable parameter, perturb its index
+    by ±1 (within bounds, respecting validity) and report the worst-case
+    (max-|Δ|) change in CPI and cost. Empty dict for params at boundary or
+    otherwise unperturbable without breaking feasibility."""
+    if pareto_X.size == 0:
+        return []
+
+    perturb_rows: list[np.ndarray] = []
+    meta: list[tuple[int, int]] = []  # (pareto_idx, param_col)
+    for i in range(len(pareto_X)):
+        for j in range(N_SEARCH_PARAMS):
+            for delta in (-1, +1):
+                new_val = pareto_X[i, j] + delta
+                if not (0 <= new_val < PARAM_N_VALUES[j]):
+                    continue
+                pert = pareto_X[i].copy()
+                pert[j] = new_val
+                if not bool(is_valid(pert.reshape(1, -1))[0]):
+                    continue
+                perturb_rows.append(pert)
+                meta.append((i, j))
+
+    if not perturb_rows:
+        return [{} for _ in range(len(pareto_X))]
+
+    perturb_X = np.stack(perturb_rows, axis=0)
+    F_pert = evaluate_indices(perturb_X, model, bundles, scaler, device, batch_size)
+
+    buckets: list[dict[str, dict[str, list[float]]]] = [
+        {p: {"dcpi": [], "dcost": []} for p in SEARCH_PARAM_ORDER}
+        for _ in range(len(pareto_X))
+    ]
+    for k, (i, j) in enumerate(meta):
+        param = SEARCH_PARAM_ORDER[j]
+        buckets[i][param]["dcpi"].append(float(F_pert[k, 0] - pareto_F[i, 0]))
+        buckets[i][param]["dcost"].append(float(F_pert[k, 1] - pareto_F[i, 1]))
+
+    reduced: list[dict[str, dict[str, float]]] = []
+    for b in buckets:
+        entry: dict[str, dict[str, float]] = {}
+        for p, d in b.items():
+            if d["dcpi"]:
+                entry[p] = {
+                    "max_abs_dcpi": float(np.max(np.abs(d["dcpi"]))),
+                    "max_abs_dcost": float(np.max(np.abs(d["dcost"]))),
+                }
+        reduced.append(entry)
+    return reduced
+
+
+def flag_validation_candidates(pareto_F: np.ndarray, k: int) -> np.ndarray:
+    """Flag Pareto points worth spending gem5 simulation budget on: the CPI
+    optimum, the cost optimum, and up to ``k - 2`` evenly-spaced points along
+    the cost axis."""
+    n = len(pareto_F)
+    flags = np.zeros(n, dtype=bool)
+    if n == 0:
+        return flags
+    flags[int(np.argmin(pareto_F[:, 0]))] = True
+    flags[int(np.argmin(pareto_F[:, 1]))] = True
+    n_extra = max(0, k - 2)
+    if n_extra > 0 and n >= 2:
+        cost_order = np.argsort(pareto_F[:, 1])
+        positions = np.linspace(0, n - 1, n_extra + 2)[1:-1].astype(int)
+        for p in positions:
+            flags[int(cost_order[p])] = True
+    return flags
+
+
+# ---------------------------------------------------------------------------
+# Output assembly
+# ---------------------------------------------------------------------------
+
+def build_output(
+    pareto_X: np.ndarray,
+    pareto_F: np.ndarray,
+    sensitivities: list[dict[str, dict[str, float]]],
+    validation_flags: np.ndarray,
+    stats: dict[str, Any],
+) -> dict[str, Any]:
+    cfgs = decode_indices(pareto_X)
+    front: list[dict[str, Any]] = []
+    for i, cfg in enumerate(cfgs):
+        front.append(
+            {
+                "predicted_cpi": float(pareto_F[i, 0]),
+                "predicted_cost": float(pareto_F[i, 1]),
+                "validation_candidate": bool(validation_flags[i]),
+                "sensitivity": sensitivities[i] if i < len(sensitivities) else {},
+                "config": cfg,
+            }
+        )
+    return {"pareto_front": front, "stats": stats}
+
+
+def print_tradeoff_table(front: list[dict[str, Any]]) -> None:
+    print()
+    print(f"{'#':>4} {'CPI':>10} {'Cost':>12}  {'Val?':>4}  BP     L1D/L1I/L2        Widths(F/D/R/C)")
+    for i, pt in enumerate(front):
+        c = pt["config"]
+        widths = f"{c['fetch_width']}/{c['decode_width']}/{c['rename_width']}/{c['commit_width']}"
+        caches = f"{c['l1d_size']}/{c['l1i_size']}/{c['l2_size']}"
+        print(
+            f"{i:>4} {pt['predicted_cpi']:>10.4f} {pt['predicted_cost']:>12.2f}  "
+            f"{'*' if pt['validation_candidate'] else '':>4}  "
+            f"{c['branch_predictor']:<6} {caches:<18} {widths}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Evaluate cost + mean CPI for one HW config.")
+    p = argparse.ArgumentParser(description="Pareto-optimal hardware configuration search.")
     p.add_argument("--checkpoint", type=Path, required=True,
                    help="Directory containing checkpoint.pt and scaler.joblib.")
     p.add_argument("--traces-dir", type=Path, required=True,
                    help="Parent of trace dirs, or one trace dir containing ronamol/.")
+    p.add_argument("--output", type=Path, default=Path("pareto_front.json"),
+                   help="Where to write the JSON Pareto front.")
+    p.add_argument("--lhs-samples", type=int, default=4*1024,
+                   help="Number of Latin Hypercube samples drawn in Stage 2.")
+    p.add_argument("--near-pareto-frac", type=float, default=0.05,
+                   help="Fraction of Stage 2 population to peel as the seed pool for Stage 3.")
+    p.add_argument("--nsga-pop-size", type=int, default=200,
+                   help="Population size per branch_predictor bifurcation in Stage 3.")
+    p.add_argument("--nsga-generations", type=int, default=60,
+                   help="Number of NSGA-II generations per bifurcation.")
+    p.add_argument("--batch-size", type=int, default=512,
+                   help="Model-forward batch size (configs per chunk).")
+    p.add_argument("--validation-k", type=int, default=5,
+                   help="Number of Pareto points to tag as gem5 validation candidates.")
+    p.add_argument("--skip-sensitivity", action="store_true",
+                   help="Skip per-parameter sensitivity annotation on the final front.")
+    p.add_argument("--seed", type=int, default=42, help="RNG seed.")
+    p.add_argument("--quiet", action="store_true", help="Suppress per-generation NSGA-II output.")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    rng = np.random.default_rng(args.seed)
+
     ckpt_path, scaler_path = resolve_artifact_paths(args.checkpoint)
     bundles = [load_trace_bundle(p) for p in discover_trace_dirs(args.traces_dir)]
+    print(f"Loaded {len(bundles)} trace bundle(s)")
 
     scaler: StandardScaler = joblib.load(scaler_path)
     if not hasattr(scaler, "feature_names_in_"):
@@ -454,11 +1098,70 @@ def main() -> None:
     device = "xla"
     model = load_model(ckpt_path, input_size=n_features, device=device)
 
-    cfgs = [dict(DEFAULT_CONFIG)] * BATCH_CONFIGS
-    mean_cpis = evaluate_configs(model, bundles, cfgs, scaler, device)
-    costs = hardware_cost(cfgs)
-    for i, (cpi, cost) in enumerate(zip(mean_cpis, costs)):
-        print(f"cfg[{i}]  n_traces={len(bundles)}  mean_cpi={cpi:.6f}  cost={cost:.4f}")
+    # Warm up XLA compilation with a single baseline config.
+    default_cpi = evaluate_configs(model, bundles, [dict(DEFAULT_CONFIG)], scaler, device)
+    default_cost = hardware_cost([DEFAULT_CONFIG])[0]
+    print(f"Baseline config: predicted CPI={default_cpi[0]:.4f}, cost={default_cost:.2f}")
+
+    # -------------------- Stage 2 --------------------
+    stage2 = stage2_global_sample(
+        n_samples=args.lhs_samples,
+        model=model,
+        bundles=bundles,
+        scaler=scaler,
+        device=device,
+        rng=rng,
+        batch_size=args.batch_size,
+        near_pareto_frac=args.near_pareto_frac,
+    )
+
+    # -------------------- Stage 3 --------------------
+    stage3 = stage3_nsga2(
+        seed_X=stage2["seed_X"],
+        model=model,
+        bundles=bundles,
+        scaler=scaler,
+        device=device,
+        pop_size=args.nsga_pop_size,
+        n_generations=args.nsga_generations,
+        batch_size=args.batch_size,
+        rng=rng,
+        verbose=not args.quiet,
+    )
+
+    # -------------------- Stage 4 --------------------
+    full_X = merge_archive(stage2["archive_X"], stage3["archive_X"])
+    full_F = merge_archive(stage2["archive_F"], stage3["archive_F"])
+    pareto_X, pareto_F = final_pareto(full_X, full_F)
+    # Sort ascending by cost so the tradeoff curve reads left-to-right.
+    order = np.argsort(pareto_F[:, 1])
+    pareto_X = pareto_X[order]
+    pareto_F = pareto_F[order]
+    print(f"[Stage 4] Final Pareto front: {len(pareto_X)} points (from archive of {len(full_X)})")
+
+    if args.skip_sensitivity:
+        sensitivities: list[dict[str, dict[str, float]]] = [{} for _ in range(len(pareto_X))]
+    else:
+        print("[Stage 4] Computing per-parameter sensitivity")
+        sensitivities = compute_sensitivity(
+            pareto_X, pareto_F, model, bundles, scaler, device, args.batch_size
+        )
+
+    flags = flag_validation_candidates(pareto_F, k=args.validation_k)
+
+    stats = {
+        "stage2": stage2["stats"],
+        "stage3": stage3["stats"],
+        "n_archive_total": int(len(full_X)),
+        "n_pareto_final": int(len(pareto_X)),
+        "n_validation_candidates": int(int(flags.sum())),
+    }
+    output = build_output(pareto_X, pareto_F, sensitivities, flags, stats)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(output, indent=2))
+    print_tradeoff_table(output["pareto_front"])
+    print(f"\nWrote {len(output['pareto_front'])} Pareto points to {args.output}")
 
 
 if __name__ == "__main__":
