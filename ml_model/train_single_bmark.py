@@ -18,6 +18,17 @@ from model import PeregrineMLModel
 import torch_xla.core.xla_model as xm
 import torch_xla
 
+SPEC_BENCHMARKS = [
+    "505.mcf_r",
+    "502.gcc_r",
+    "520.omnetpp_r",
+    "523.xalancbmk_r",
+    "525.x264_r",
+    "531.deepsjeng_r",
+    "541.leela_r",
+    "548.exchange2_r",
+    "557.xz_r",
+]
 
 def load_dataset(dataset_path: str) -> pd.DataFrame:
     return pd.read_csv(dataset_path)
@@ -109,10 +120,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
+        "--spec-train",
+        type=bool,
+        default=False,
+        help="Use the SPEC2017 training set for training"
+    )
+    parser.add_argument(
         "--test-size",
         default=0.25,
         type=float,
-        help="Fraction of the dataset to use for testing"
+        help="Fraction of the benchmark to use for testing"
     )
     parser.add_argument(
         "--benchmark",
@@ -137,10 +154,18 @@ def main() -> None:
     print(f"Loading dataset from {args.dataset_path}")
     dataset = load_dataset(args.dataset_path)
     print(f'Dataset size: {dataset.shape[0]}')
-    dataset = dataset[dataset["benchmark"] == args.benchmark]
-    print(f"Using train/test split with test size {args.test_size}")
-    train_dataset, test_dataset = train_test_split(dataset, test_size=args.test_size, random_state=42)
 
+    if args.spec_train:
+        train_dataset = dataset[dataset["benchmark"].isin(SPEC_BENCHMARKS) & dataset["benchmark"] != args.benchmark]
+        benchmark_dataset = dataset[dataset["benchmark"] == args.benchmark]
+        benchmark_train_dataset, benchmark_test_dataset = train_test_split(benchmark_dataset, test_size=args.test_size, random_state=42)
+        train_dataset = pd.concat([train_dataset, benchmark_train_dataset])
+        test_dataset = benchmark_test_dataset
+    else:
+        dataset = dataset[dataset["benchmark"] == args.benchmark]
+        train_dataset, test_dataset = train_test_split(dataset, test_size=args.test_size, random_state=42)
+
+    print(f"Using train/test split on {args.benchmark} with test size {args.test_size}")
     print(f"Final split: {len(train_dataset)} train, {len(test_dataset)} test ({len(test_dataset)/(len(train_dataset)+len(test_dataset)):.2%} test)")
     print(f"Train dataset shape: {train_dataset.shape}")
     print(f"Test dataset shape: {test_dataset.shape}")
