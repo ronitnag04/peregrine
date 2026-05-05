@@ -30,10 +30,10 @@ def train_epoch(
 ) -> tuple[float, float]:
     """One training epoch; returns mean L1 loss and mean absolute percent error on train batches."""
     model.train()
-    total_loss = 0.0
-    total_percent_error = 0.0
+    total_loss = torch.zeros((), device=device)
+    total_percent_error = torch.zeros((), device=device)
     num_batches = 0
-    eps = 1e-8
+    eps = torch.tensor(1e-8, device=device)
     for inputs, targets in loader:
         inputs = inputs.to(device)
         targets = targets.to(device)
@@ -43,14 +43,16 @@ def train_epoch(
         loss.backward()
         optimizer.step()
         torch_xla.sync()
-        total_loss += loss.item()
+        total_loss += loss.detach()
         batch_percent_error = (
             (torch.abs(outputs - targets) / (torch.abs(targets) + eps)).mean() * 100.0
         )
-        total_percent_error += batch_percent_error.item()
+        total_percent_error += batch_percent_error.detach()
         num_batches += 1
     denom = max(num_batches, 1)
-    return total_loss / denom, total_percent_error / denom
+    mean_loss = total_loss / denom
+    mean_percent_error = total_percent_error / denom
+    return mean_loss.item(), mean_percent_error.item()
 
 
 def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
@@ -92,11 +94,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Peregrine dataset csv file",
     )
     parser.add_argument(
-        "--train-benchmarks",
-        type=str,
-        help="Comma-separated list of benchmarks to train on"
-    )
-    parser.add_argument(
         "-o",
         "--output-dir",
         help="Output directory for checkpoint and metrics files",
@@ -113,9 +110,6 @@ def main() -> None:
 
     print(f"Loading dataset from {args.dataset_path}")
     dataset = load_dataset(args.dataset_path)
-    if args.train_benchmarks:
-        benchmarks = [b.strip() for b in args.train_benchmarks.split(",") if b.strip()]
-        dataset = dataset[dataset["benchmark"].isin(benchmarks)]
     print(f"Dataset size: {dataset.shape[0]}")
 
     train_features = pre_process_features(dataset)
@@ -160,7 +154,7 @@ def main() -> None:
         print(
             f"Epoch {epoch:02d} | "
             f"Train Loss: {train_loss:.4f} | "
-            f"Train % Error: {train_percent_error:.2f}% | "
+            f"Train Error: {train_percent_error:.2f}% | "
             f"Time: {epoch_duration:.2f}s"
         )
 
