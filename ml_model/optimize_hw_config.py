@@ -728,16 +728,36 @@ def lhs_sample(n_samples: int, rng: np.random.Generator) -> np.ndarray:
     return indices
 
 
+def pareto_front_2d(F: np.ndarray) -> np.ndarray:
+    """Indices of the non-dominated front for a 2-objective minimization problem.
+
+    O(N log N) via lexicographic sort + prefix-min sweep. Equivalent to
+    pymoo's ``NonDominatedSorting(only_non_dominated_front=True)`` for M=2,
+    but tractable at N >> 10^4 where the O(N^2) default stalls and blows memory.
+    """
+    n = F.shape[0]
+    if n == 0:
+        return np.empty(0, dtype=np.int64)
+    # Sort by (f0 asc, f1 asc). For j < i in sorted order, f0[j] <= f0[i], so
+    # i is non-dominated iff its f1 is strictly less than the running min of
+    # earlier f1s. Duplicates collapse to their first occurrence.
+    order = np.lexsort((F[:, 1], F[:, 0]))
+    f1 = F[order, 1]
+    keep = np.empty(n, dtype=bool)
+    keep[0] = True
+    keep[1:] = f1[1:] < np.minimum.accumulate(f1)[:-1]
+    return np.sort(order[keep])
+
+
 def _extract_fronts_until(F: np.ndarray, n_target: int) -> list[np.ndarray]:
     """Return a list of row-index arrays forming successive non-dominated fronts
     until we have collected at least ``n_target`` rows."""
-    nds = NonDominatedSorting()
     n = F.shape[0]
     remaining = np.arange(n)
     layers: list[np.ndarray] = []
     collected = 0
     while collected < n_target and remaining.size > 0:
-        front = nds.do(F[remaining], only_non_dominated_front=True)
+        front = pareto_front_2d(F[remaining])
         layer = remaining[front]
         layers.append(layer)
         collected += layer.size
@@ -795,8 +815,7 @@ def stage2_global_sample(
           f"cost={timings.cost_s:.2f}s calls={timings.n_model_calls})")
 
     t0 = time.perf_counter()
-    nds = NonDominatedSorting()
-    pareto_rows = nds.do(F, only_non_dominated_front=True)
+    pareto_rows = pareto_front_2d(F)
     # Near-Pareto inclusion: peel successive non-dominated layers until we have
     # at least ``near_pareto_frac`` of the evaluated population. Preserves
     # genetic diversity for Stage 3 while still biasing toward the frontier.
@@ -1087,8 +1106,7 @@ def final_pareto(archive_X: np.ndarray, archive_F: np.ndarray) -> tuple[np.ndarr
     valid = is_valid(X)
     X = X[valid]
     F = F[valid]
-    nds = NonDominatedSorting()
-    pareto_rows = nds.do(F, only_non_dominated_front=True)
+    pareto_rows = pareto_front_2d(F)
     return X[pareto_rows], F[pareto_rows]
 
 
@@ -1099,13 +1117,13 @@ def compute_sensitivity(
     builder: FeatureBuilder,
     device: str,
     batch_size: int,
-) -> list[dict[str, dict[str, float]]]:
+) -> tuple[list[dict[str, dict[str, float]]], int]:
     """For each Pareto config and each searchable parameter, perturb its index
     by ±1 (within bounds, respecting validity) and report the worst-case
     (max-|Δ|) change in CPI and cost. Empty dict for params at boundary or
     otherwise unperturbable without breaking feasibility."""
     if pareto_X.size == 0:
-        return []
+        return [], 0
 
     perturb_rows: list[np.ndarray] = []
     meta: list[tuple[int, int]] = []  # (pareto_idx, param_col)
@@ -1123,10 +1141,11 @@ def compute_sensitivity(
                 meta.append((i, j))
 
     if not perturb_rows:
-        return [{} for _ in range(len(pareto_X))]
+        return [{} for _ in range(len(pareto_X))], 0
 
     perturb_X = np.stack(perturb_rows, axis=0)
     F_pert = evaluate_indices(perturb_X, model, builder, device, batch_size)
+    n_sensitivity_configs = int(perturb_X.shape[0])
 
     buckets: list[dict[str, dict[str, list[float]]]] = [
         {p: {"dcpi": [], "dcost": []} for p in SEARCH_PARAM_ORDER}
@@ -1147,7 +1166,7 @@ def compute_sensitivity(
                     "max_abs_dcost": float(np.max(np.abs(d["dcost"]))),
                 }
         reduced.append(entry)
-    return reduced
+    return reduced, n_sensitivity_configs
 
 
 def flag_validation_candidates(pareto_F: np.ndarray, k: int) -> np.ndarray:
@@ -1179,6 +1198,7 @@ def build_output(
     sensitivities: list[dict[str, dict[str, float]]],
     validation_flags: np.ndarray,
     stats: dict[str, Any],
+    baseline: dict[str, Any],
 ) -> dict[str, Any]:
     cfgs = decode_indices(pareto_X)
     front: list[dict[str, Any]] = []
@@ -1192,12 +1212,19 @@ def build_output(
                 "config": cfg,
             }
         )
-    return {"pareto_front": front, "stats": stats}
+    return {"baseline": baseline, "pareto_front": front, "stats": stats}
 
 
-def print_tradeoff_table(front: list[dict[str, Any]]) -> None:
+def print_tradeoff_table(front: list[dict[str, Any]], baseline: dict[str, Any]) -> None:
     print()
     print(f"{'#':>4} {'CPI':>10} {'Cost':>12}  {'Val?':>4}  BP     L1D/L1I/L2        Widths(F/D/R/C)")
+    bc = baseline["config"]
+    widths = f"{bc['fetch_width']}/{bc['decode_width']}/{bc['rename_width']}/{bc['commit_width']}"
+    caches = f"{bc['l1d_size']}/{bc['l1i_size']}/{bc['l2_size']}"
+    print(
+        f"{'base':>4} {baseline['predicted_cpi']:>10.4f} {baseline['predicted_cost']:>12.2f}  "
+        f"{'':>4}  {bc['branch_predictor']:<6} {caches:<18} {widths}"
+    )
     for i, pt in enumerate(front):
         c = pt["config"]
         widths = f"{c['fetch_width']}/{c['decode_width']}/{c['rename_width']}/{c['commit_width']}"
@@ -1221,13 +1248,13 @@ def parse_args() -> argparse.Namespace:
                    help="Parent of trace dirs, or one trace dir containing ronamol/.")
     p.add_argument("--output", type=Path, default=Path("pareto_front.json"),
                    help="Where to write the JSON Pareto front.")
-    p.add_argument("--lhs-samples", type=int, default=4*1024,
+    p.add_argument("--lhs-samples", type=int, default=256*1024,
                    help="Number of Latin Hypercube samples drawn in Stage 2.")
-    p.add_argument("--near-pareto-frac", type=float, default=0.05,
+    p.add_argument("--near-pareto-frac", type=float, default=0.2,
                    help="Fraction of Stage 2 population to peel as the seed pool for Stage 3.")
-    p.add_argument("--nsga-pop-size", type=int, default=200,
+    p.add_argument("--nsga-pop-size", type=int, default=400,
                    help="Population size per branch_predictor bifurcation in Stage 3.")
-    p.add_argument("--nsga-generations", type=int, default=60,
+    p.add_argument("--nsga-generations", type=int, default=120,
                    help="Number of NSGA-II generations per bifurcation.")
     p.add_argument("--batch-size", type=int, default=512,
                    help="Model-forward batch size (configs per chunk).")
@@ -1268,12 +1295,16 @@ def main() -> None:
 
     # Warm up XLA compilation with a single baseline config.
     t0 = time.perf_counter()
-    default_cpi = evaluate_configs(model, builder, [dict(DEFAULT_CONFIG)], device)
+    warmup_timings = EvalTimings()
+    default_cpi = evaluate_configs(
+        model, builder, [dict(DEFAULT_CONFIG)], device, warmup_timings
+    )
     default_cost = hardware_cost([DEFAULT_CONFIG])[0]
     print(
         f"Baseline config: predicted CPI={default_cpi[0]:.4f}, cost={default_cost:.2f} "
         f"(warmup {time.perf_counter() - t0:.2f}s)"
     )
+    n_warmup_configs = warmup_timings.n_cfgs_evaluated
 
     # -------------------- Stage 2 --------------------
     stage2 = stage2_global_sample(
@@ -1316,10 +1347,11 @@ def main() -> None:
 
     if args.skip_sensitivity:
         sensitivities: list[dict[str, dict[str, float]]] = [{} for _ in range(len(pareto_X))]
+        n_sensitivity_configs = 0
     else:
         t0 = time.perf_counter()
         print("[Stage 4] Computing per-parameter sensitivity")
-        sensitivities = compute_sensitivity(
+        sensitivities, n_sensitivity_configs = compute_sensitivity(
             pareto_X, pareto_F, model, builder, device, args.batch_size
         )
         print(f"[Stage 4] Sensitivity computed in {time.perf_counter() - t0:.2f}s")
@@ -1327,19 +1359,46 @@ def main() -> None:
     flags = flag_validation_candidates(pareto_F, k=args.validation_k)
     print(f"[Stage 4] Total: {time.perf_counter() - stage4_t0:.2f}s")
 
+    n_bundles = builder.n_bundles
+    n_stage2_configs = int(stage2["stats"]["n_unique_lhs"])
+    n_stage3_configs = sum(int(s["n_evaluated"]) for s in stage3["stats"].values())
+    n_total_configs = (
+        n_warmup_configs + n_stage2_configs + n_stage3_configs + n_sensitivity_configs
+    )
+    n_total_inference_points = n_total_configs * n_bundles
+    print(
+        f"Total inference: {n_total_configs} configs × {n_bundles} program points "
+        f"= {n_total_inference_points} (warmup={n_warmup_configs}, stage2={n_stage2_configs}, "
+        f"stage3={n_stage3_configs}, sensitivity={n_sensitivity_configs})"
+    )
+
     stats = {
         "stage2": stage2["stats"],
         "stage3": stage3["stats"],
         "n_archive_total": int(len(full_X)),
         "n_pareto_final": int(len(pareto_X)),
         "n_validation_candidates": int(int(flags.sum())),
+        "n_program_points": int(n_bundles),
+        "n_inference_configs": {
+            "warmup": int(n_warmup_configs),
+            "stage2": int(n_stage2_configs),
+            "stage3": int(n_stage3_configs),
+            "sensitivity": int(n_sensitivity_configs),
+            "total": int(n_total_configs),
+        },
+        "n_total_inference_points": int(n_total_inference_points),
         "total_duration_s": round(time.perf_counter() - total_t0, 2),
     }
-    output = build_output(pareto_X, pareto_F, sensitivities, flags, stats)
+    baseline = {
+        "predicted_cpi": float(default_cpi[0]),
+        "predicted_cost": float(default_cost),
+        "config": dict(DEFAULT_CONFIG),
+    }
+    output = build_output(pareto_X, pareto_F, sensitivities, flags, stats, baseline)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, indent=2))
-    print_tradeoff_table(output["pareto_front"])
+    print_tradeoff_table(output["pareto_front"], output["baseline"])
     print(f"\nWrote {len(output['pareto_front'])} Pareto points to {args.output}")
     print(f"Total runtime: {time.perf_counter() - total_t0:.2f}s")
 
