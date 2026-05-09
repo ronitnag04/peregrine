@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Read spec_v3_sweep.csv, find rows for a given benchmark, sample N at random,
-copy matching trace archives from S3, and gunzip them under ronamol/<benchmark>_traces/.
+Read spec_v3_sweep.csv, sample N rows at random (across all benchmarks, or from a specific benchmark
+if --benchmark is given), copy matching trace archives from S3, and gunzip them under ronamol/traces/.
 Downloads use a thread pool (-j / --jobs) so many traces can be fetched in parallel.
 
 Sweep row k (1-based among data rows) maps to:
@@ -36,10 +36,12 @@ def sweep_row_id_from_df_index(idx: int) -> int:
     return int(idx) + 1
 
 
-def load_sweep_and_filter(csv_path: Path, benchmark: str) -> pd.DataFrame:
+def load_sweep_and_filter(csv_path: Path, benchmark: str | None) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     if "benchmark" not in df.columns:
         sys.exit("CSV must have a 'benchmark' column.")
+    if benchmark is None:
+        return df.copy()
     return df.loc[df["benchmark"] == benchmark].copy()
 
 
@@ -75,11 +77,7 @@ def fetch_one_trace(
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Sample N sweep rows for a benchmark and fetch trace .csv.gz from S3."
-    )
-    p.add_argument(
-        "benchmark",
-        help="Benchmark name as in CSV, e.g. 541.leela_r",
+        description="Sample N sweep rows from all benchmarks (or a specific benchmark with --benchmark) and fetch trace .csv.gz from S3."
     )
     p.add_argument(
         "-n",
@@ -87,6 +85,10 @@ def main() -> None:
         type=int,
         required=True,
         help="Number of random rows to fetch",
+    )
+    p.add_argument(
+        "--benchmark",
+        help="Optional: benchmark name as in CSV (e.g. 541.leela_r). If omitted, samples across all benchmarks.",
     )
     p.add_argument(
         "--sim-sweep-csv",
@@ -143,21 +145,41 @@ def main() -> None:
     print(f"Loading {csv_path} with pandas ...", flush=True)
     filtered = load_sweep_and_filter(csv_path, args.benchmark)
     if filtered.empty:
-        sys.exit(f"No rows found for benchmark {args.benchmark!r}")
+        if args.benchmark:
+            sys.exit(f"No rows found for benchmark {args.benchmark!r}")
+        else:
+            sys.exit("No rows found in CSV")
 
     n = min(args.count, len(filtered))
     if n < args.count:
+        bench_msg = f" for benchmark {args.benchmark!r}" if args.benchmark else ""
         print(
-            f"Warning: only {len(filtered)} matching rows; sampling {n} instead of {args.count}.",
+            f"Warning: only {len(filtered)} matching rows{bench_msg}; sampling {n} instead of {args.count}.",
             file=sys.stderr,
         )
 
-    sample_df = filtered.sample(n=n, random_state=args.seed)
-    chosen = sorted(sweep_row_id_from_df_index(i) for i in sample_df.index)
-    print(f"Picked {len(chosen)} sweep row id(s): {chosen[:20]}{' ...' if len(chosen) > 20 else ''}")
+    # Stratified sampling: sample proportionally from each benchmark
+    sampling_frac = n / len(filtered)
+    sample_df = filtered.groupby("benchmark", group_keys=False).apply(
+        lambda x: x.sample(frac=sampling_frac, random_state=args.seed)
+    )
 
-    bench_safe = args.benchmark.replace("/", "_")
-    dest_root = args.output_base.resolve() / f"{bench_safe}_traces"
+    # If we're slightly under due to rounding, top up with additional random samples
+    if len(sample_df) < n:
+        remaining = n - len(sample_df)
+        unsampled = filtered.drop(sample_df.index)
+        additional = unsampled.sample(n=remaining, random_state=args.seed + 1)
+        sample_df = pd.concat([sample_df, additional])
+
+    chosen = sorted(sweep_row_id_from_df_index(i) for i in sample_df.index)
+    print(f"Picked {len(chosen)} sweep row id(s):")
+    benchmark_count = sample_df["benchmark"].value_counts()
+
+    if args.benchmark:
+        bench_safe = args.benchmark.replace("/", "_")
+        dest_root = args.output_base.resolve() / f"{bench_safe}_traces"
+    else:
+        dest_root = args.output_base.resolve() / "fetched_traces"
     dest_root.mkdir(parents=True, exist_ok=True)
 
     aws = _find_aws_cli()
@@ -197,6 +219,10 @@ def main() -> None:
         for rid, msg in errors:
             print(f"Failed row_{rid}: {msg}", file=sys.stderr)
         sys.exit(1)
+
+    print("Benchmark distribution among chosen rows:")
+    for benchmark, count in benchmark_count.items():
+        print(f"  {benchmark}: {count}")
 
     print(f"Done. Output under {dest_root}")
 
