@@ -15,8 +15,8 @@
 # Each trace directory should contain a trace.csv file.
 # Output files are created in each trace directory (see gen_cache_latency.py,
 # gen_bp_rate.py, ronamol/python/gen_features.py):
-#   - cache_latencies/l1i_<l1i_kb>_l1d_<l1d_kb>_l2_<l2_kb>_cache_latencies.npy
-#   - bp_rates/<local|tage>_bp_rate.npy
+#   - cache_latencies/l1i_<l1i_kb>_l1d_<l1d_kb>_l2_<l2_kb>_cache_latencies.npy (if KEEP_ARTIFACTS=1)
+#   - bp_rates/<local|tage>_bp_rate.npy (if KEEP_ARTIFACTS=1)
 #   - ronamol/program_features.csv
 #   - ronamol/cache_latency_summary.csv
 #   - ronamol/bp_rates_summary.csv
@@ -31,13 +31,7 @@ fi
 # Default configurations
 PEREGRINE_ROOT="${PEREGRINE_ROOT:-/home/ubuntu/peregrine}"
 TRACE_DIR="${TRACE_DIR:-$PEREGRINE_ROOT/traces}"
-
-# Cache configuration arrays (from gen_cache_latency.py)
-L1_KB=(16 32 64 128 256)    # L1I and L1D sizes
-L2_KB=(512 1024 2048 4096)  # L2 sizes
-
-# Branch predictor types (from gen_bp_rate.py)
-BP_TYPES=("local" "tage")
+KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
 export PEREGRINE_ROOT TRACE_DIR L1_KB L2_KB BP_TYPES
 
@@ -153,33 +147,57 @@ run_features() {
   echo "Generating features for $(basename "$trace_dir")"
   
   cd "$PEREGRINE_ROOT" && python3 ronamol/python/gen_features.py "$trace_file"
+
+  if [[ "$KEEP_ARTIFACTS" -eq 0 ]]; then
+    echo "Cleaning up intermediate artifacts for $(basename "$trace_dir")"
+    rm -rf "$trace_dir/cache_latencies" "$trace_dir/bp_rates"
+  fi
 }
 
 export -f run_cache_latency
 export -f run_bp_rate
 export -f run_features
 
-# Function to generate all cache latency combinations for a trace
-generate_cache_combinations() {
+# Function to process an entire trace end-to-end
+process_trace() {
   local trace_file="$1"
-  
+
+  if [[ ! -f "$trace_file" ]]; then
+    echo "Trace file not found: $trace_file" >&2
+    return 1
+  fi
+
+  local l1i_size
+  local l1d_size
+  local l2_size
+  local bp_type
+
+  # Cache configuration arrays (from gen_cache_latency.py)
+  L1_KB=(16 32 64 128 256)    # L1I and L1D sizes
+  L2_KB=(512 1024 2048 4096)  # L2 sizes
+
+  # Branch predictor types (from gen_bp_rate.py)
+  BP_TYPES=("local" "tage")
+
+  echo "Generating cache latencies for $(basename "$(dirname "$trace_file")")"
   for l1i_size in "${L1_KB[@]}"; do
     for l1d_size in "${L1_KB[@]}"; do
       for l2_size in "${L2_KB[@]}"; do
-        echo "$trace_file $l1i_size $l1d_size $l2_size"
+        run_cache_latency "$trace_file" "$l1i_size" "$l1d_size" "$l2_size"
       done
     done
   done
+
+  echo "Generating bp rates for $(basename "$(dirname "$trace_file")")"
+  for bp_type in "${BP_TYPES[@]}"; do
+    run_bp_rate "$trace_file" "$bp_type"
+  done
+
+  echo "Generating features for $(basename "$(dirname "$trace_file")")"
+  run_features "$trace_file"
 }
 
-# Function to generate all branch predictor combinations for a trace
-generate_bp_combinations() {
-  local trace_file="$1"
-  
-  for bp_type in "${BP_TYPES[@]}"; do
-    echo "$trace_file $bp_type"
-  done
-}
+export -f process_trace
 
 # Find all trace.csv files in TRACE_DIR subdirectories
 trace_files=()
@@ -194,43 +212,16 @@ fi
 
 echo "Found ${#trace_files[@]} trace files in $TRACE_DIR"
 
-# Calculate total number of jobs
-total_cache_jobs=$((${#trace_files[@]} * ${#L1_KB[@]} * ${#L1_KB[@]} * ${#L2_KB[@]}))
-total_bp_jobs=$((${#trace_files[@]} * ${#BP_TYPES[@]}))
-total_feature_jobs=${#trace_files[@]}
-total_jobs=$((total_cache_jobs + total_bp_jobs + total_feature_jobs))
-
-echo "Total jobs to run:"
-echo "  Cache latency jobs: $total_cache_jobs (${#trace_files[@]} traces × ${#L1_KB[@]}×${#L1_KB[@]}×${#L2_KB[@]} configurations)"
-echo "  Branch predictor jobs: $total_bp_jobs (${#trace_files[@]} traces × ${#BP_TYPES[@]} types)"
-echo "  Feature generation jobs: $total_feature_jobs (${#trace_files[@]} traces)"
-echo "  Total: $total_jobs jobs"
+echo "Total trace workflows to run: ${#trace_files[@]}"
 
 echo ""
 echo "Starting parallel execution at $(date '+%Y-%m-%d %H:%M:%S %Z')"
 SWEEP_START_EPOCH=$(date +%s)
 
-# Generate and run cache latency jobs in parallel
-echo "Running cache latency simulations..."
-for trace_file in "${trace_files[@]}"; do
-  generate_cache_combinations "$trace_file"
-done | parallel -j "$(nproc)" --colsep ' ' \
-  --env PEREGRINE_ROOT --env run_cache_latency \
-  run_cache_latency {1} {2} {3} {4}
-
-# Generate and run branch predictor jobs in parallel
-echo "Running branch predictor simulations..."
-for trace_file in "${trace_files[@]}"; do
-  generate_bp_combinations "$trace_file"
-done | parallel -j "$(nproc)" --colsep ' ' \
-  --env PEREGRINE_ROOT --env run_bp_rate \
-  run_bp_rate {1} {2}
-
-# Generate features for all traces in parallel
-echo "Generating features..."
+echo "Processing traces in parallel..."
 printf '%s\n' "${trace_files[@]}" | parallel -j "$(nproc)" \
-  --env PEREGRINE_ROOT --env run_features \
-  run_features {}
+  --env PEREGRINE_ROOT --env run_cache_latency --env run_bp_rate --env run_features --env process_trace \
+  process_trace {}
 
 SWEEP_END_EPOCH=$(date +%s)
 SWEEP_ELAPSED=$((SWEEP_END_EPOCH - SWEEP_START_EPOCH))
