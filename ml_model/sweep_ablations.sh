@@ -17,9 +17,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+SWEEP_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-DATASET_PATH="training_data/ronamol_spec_training_data_v3.csv"
-PYTHON_SCRIPT="train_ablations.py"
+DATASET_PATH="${DATASET_PATH:-training_data/ronamol_spec_training_data_v3.csv}"
+PYTHON_SCRIPT="${PYTHON_SCRIPT:-train_ablations.py}"
+SWEEP_DIR="${SWEEP_DIR:-sweep_results/ablations_${SWEEP_TIMESTAMP}}"
+mkdir -p "$SWEEP_DIR"
 
 # Ordered list of ablation flags. Order determines the bitmask indexing below
 # and the ordering of the label suffix for each run.
@@ -30,10 +33,8 @@ GROUP_FLAGS=(
 )
 N_GROUPS=${#GROUP_NAMES[@]}
 N_COMBOS=$(( 1 << N_GROUPS ))
-
-SWEEP_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-SWEEP_DIR="sweep_results/ablations_${SWEEP_TIMESTAMP}"
-mkdir -p "$SWEEP_DIR"
+TRAIN_TEST_SPLITS=(0.25 0.5 0.75 0.9 0.95 0.97 0.99)
+SWEEP_TTS="${SWEEP_TTS:-0}"
 
 SWEEP_LOG="$SWEEP_DIR/sweep_log.txt"
 {
@@ -102,7 +103,15 @@ for ((mask = 0; mask < N_COMBOS; mask++)); do
   run_dir="$SWEEP_DIR/mask_$(printf "%02d" "$mask")_${label}"
   echo ""
   echo "[$((mask + 1))/$N_COMBOS] bitmask run"
-  run_one "$run_dir" "$label" "${extra_args[@]}"
+  if (( SWEEP_TTS == 1 )); then
+    mkdir -p "$run_dir"
+    for tts in "${TRAIN_TEST_SPLITS[@]}"; do
+      tts_dir="$run_dir/tts_${tts}"
+      run_one "$tts_dir" "${label}_tts${tts}" "${extra_args[@]}" --test-size "$tts"
+    done
+  else
+    run_one "$run_dir" "$label" "${extra_args[@]}"
+  fi
 done
 
 # --- Standalone --drop-all-features run (not a bitmask combination). This flag
@@ -111,7 +120,15 @@ done
 echo ""
 echo "[extra] --drop-all-features standalone run"
 ALL_RUN_DIR="$SWEEP_DIR/extra_drop_all_features"
-run_one "$ALL_RUN_DIR" "drop_all_features" "--drop-all-features"
+if (( SWEEP_TTS == 1 )); then
+  mkdir -p "$ALL_RUN_DIR"
+  for tts in "${TRAIN_TEST_SPLITS[@]}"; do
+    tts_dir="$ALL_RUN_DIR/tts_${tts}"
+    run_one "$tts_dir" "drop_all_features_tts${tts}" "--drop-all-features" --test-size "$tts"
+  done
+else
+  run_one "$ALL_RUN_DIR" "drop_all_features" "--drop-all-features"
+fi
 
 echo ""
 echo "=========================================="
@@ -124,7 +141,7 @@ SUMMARY_CSV="$SWEEP_DIR/summary.csv"
 SUMMARY_TXT="$SWEEP_DIR/summary.txt"
 
 {
-  echo "mask,label,num_features,best_eval_loss,best_percent_error,drop_cache_cdf_features,drop_stale_features,drop_all_features"
+  echo "mask,label,tts,num_features,best_eval_loss,best_percent_error,drop_cache_cdf_features,drop_stale_features,drop_all_features"
 } > "$SUMMARY_CSV"
 
 python - "$SWEEP_DIR" "$SUMMARY_CSV" "$SUMMARY_TXT" <<'PY'
@@ -142,35 +159,49 @@ for run_dir in sorted(sweep_dir.iterdir()):
         continue
     if not (run_dir.name.startswith("mask_") or run_dir.name.startswith("extra_")):
         continue
-    metrics_path = run_dir / "metrics.json"
-    if not metrics_path.exists():
-        continue
-    try:
-        with metrics_path.open() as f:
-            m = json.load(f)
-    except Exception as e:
-        print(f"  (skip {run_dir.name}: {e})")
-        continue
 
     if run_dir.name.startswith("mask_"):
         parts = run_dir.name.split("_", 2)
         mask = parts[1] if len(parts) > 1 else ""
-        label = parts[2] if len(parts) > 2 else run_dir.name
+        base_label = parts[2] if len(parts) > 2 else run_dir.name
     else:
         mask = "extra"
-        label = run_dir.name[len("extra_"):] or run_dir.name
+        base_label = run_dir.name[len("extra_"):] or run_dir.name
 
-    flags = m.get("ablation_flags", {})
-    rows.append({
-        "mask": mask,
-        "label": label,
-        "num_features": m.get("num_features"),
-        "best_eval_loss": m.get("best_eval_loss"),
-        "best_percent_error": m.get("best_percent_error"),
-        "drop_cache_cdf_features": int(bool(flags.get("drop_cache_cdf_features"))),
-        "drop_stale_features":     int(bool(flags.get("drop_stale_features"))),
-        "drop_all_features":       int(bool(flags.get("drop_all_features"))),
-    })
+    # Collect (metrics_dir, tts_label) pairs. If the run has tts_* subdirs, use
+    # those; otherwise fall back to the run_dir itself.
+    tts_subdirs = sorted(
+        d for d in run_dir.iterdir() if d.is_dir() and d.name.startswith("tts_")
+    )
+    if tts_subdirs:
+        metrics_sources = [(d, d.name[len("tts_"):]) for d in tts_subdirs]
+    else:
+        metrics_sources = [(run_dir, "")]
+
+    for metrics_dir, tts in metrics_sources:
+        metrics_path = metrics_dir / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        try:
+            with metrics_path.open() as f:
+                m = json.load(f)
+        except Exception as e:
+            print(f"  (skip {metrics_dir.relative_to(sweep_dir)}: {e})")
+            continue
+
+        label = f"{base_label}_tts{tts}" if tts else base_label
+        flags = m.get("ablation_flags", {})
+        rows.append({
+            "mask": mask,
+            "label": label,
+            "tts": tts,
+            "num_features": m.get("num_features"),
+            "best_eval_loss": m.get("best_eval_loss"),
+            "best_percent_error": m.get("best_percent_error"),
+            "drop_cache_cdf_features": int(bool(flags.get("drop_cache_cdf_features"))),
+            "drop_stale_features":     int(bool(flags.get("drop_stale_features"))),
+            "drop_all_features":       int(bool(flags.get("drop_all_features"))),
+        })
 
 def _sort_key(r):
     v = r.get("best_percent_error")
@@ -181,7 +212,7 @@ rows.sort(key=_sort_key)
 with csv_path.open("a") as f:
     for r in rows:
         f.write(
-            f"{r['mask']},{r['label']},"
+            f"{r['mask']},{r['label']},{r['tts']},"
             f"{r['num_features']},{r['best_eval_loss']},{r['best_percent_error']},"
             f"{r['drop_cache_cdf_features']},{r['drop_stale_features']},{r['drop_all_features']}\n"
         )
