@@ -70,6 +70,52 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     return float(avg_loss), float(avg_percent_error)
 
 
+def write_predictions_csv(
+    output_dir: str,
+    suffix: str,
+    test_features: pd.DataFrame,
+    test_labels: pd.Series,
+    original_test_dataset: pd.DataFrame,
+    model: nn.Module,
+    device: str,
+) -> tuple[float, float]:
+    features = test_features.copy().astype(float)
+
+    benchmark_values = original_test_dataset["benchmark"].to_numpy(copy=True)
+    checkpoint_values = original_test_dataset["checkpoint"].to_numpy(copy=True)
+    fast_forward_values = original_test_dataset["fast_forward"].to_numpy(copy=True)
+
+    start_time = time.perf_counter()
+    model.eval()
+    with torch.no_grad():
+        inputs = torch.from_numpy(features.to_numpy(copy=True)).float().to(device)
+        predictions = model(inputs).detach().cpu().squeeze(1).numpy()
+        torch_xla.sync()
+    duration = time.perf_counter() - start_time
+
+    predictions_df = pd.DataFrame(
+        {
+            "benchmark": benchmark_values,
+            "checkpoint": checkpoint_values,
+            "fast_forward": fast_forward_values,
+            "actual_cpi": test_labels.to_numpy(copy=True),
+            "predicted_cpi": predictions,
+        }
+    )
+    predictions_path = os.path.join(output_dir, f"{suffix}_predictions.csv")
+    predictions_df.to_csv(predictions_path, index=False)
+
+    eps = 1e-8
+    percent_error = float(
+        (
+            (predictions_df["predicted_cpi"] - predictions_df["actual_cpi"]).abs()
+            / (predictions_df["actual_cpi"].abs() + eps)
+        ).mean()
+        * 100.0
+    )
+    return duration, percent_error
+
+
 def pre_process_features(features: pd.DataFrame) -> pd.DataFrame:
     # Drop metric columns (Y in the X -> Y regression problem)
     features = features.drop(columns=["cpi"])
@@ -119,6 +165,11 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         help="Output directory for checkpoint and metrics files",
         default="training_results",
+    )
+    parser.add_argument(
+        "--add-test-predictions",
+        action="store_true",
+        help="Write a CSV with actual/predicted CPI plus benchmark, checkpoint, and fast_forward for the test dataset.",
     )
 
     args = parser.parse_args()
@@ -221,11 +272,29 @@ def main() -> None:
     scaler_path = os.path.join(args.output_dir, f"scaler.joblib")
     joblib.dump(scaler, scaler_path)
 
+    test_predictions_duration = None
+    test_predictions_percent_error = None
+
+    if args.add_test_predictions:
+        test_predictions_duration, test_predictions_percent_error = write_predictions_csv(
+            args.output_dir,
+            "test",
+            test_features,
+            test_labels,
+            test_dataset,
+            model,
+            device,
+        )
+        print(f"Test predictions time: {test_predictions_duration:.2f}s")
+        print(f"Test predictions percent error: {test_predictions_percent_error:.2f}%")
+
     metrics_path = os.path.join(args.output_dir, f"metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "total_duration": total_duration,
+                "test_predictions_duration": test_predictions_duration,
+                "test_predictions_percent_error": test_predictions_percent_error,
                 "epochs": epochs_data,
             },
             f,
