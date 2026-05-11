@@ -89,8 +89,11 @@ struct RobLatencyData {
   std::vector<uint32_t> exec_latencies;
 };
 
+// When rob_sizes is empty, sweeps the default {1, 2, 4, ..., 1024} set.
+// Pass a single element (or any subset) to compute only the ROB sizes you need.
 std::vector<RobLatencyData> get_rob_latency_analysis(
-    const std::vector<Instr>& instr_trace);
+    const std::vector<Instr>& instr_trace,
+    const std::vector<uint16_t>& rob_sizes = {});
 
 void export_latency_analysis(const std::vector<RobLatencyData>& latency_data,
                              const std::string& output_dir);

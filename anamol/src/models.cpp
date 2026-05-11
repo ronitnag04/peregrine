@@ -664,15 +664,20 @@ PerResThrVecs get_throughput_single_config(
 
 // ROB Latency Analysis Implementation
 std::vector<RobLatencyData> get_rob_latency_analysis(
-    const std::vector<Instr>& instr_trace) {
+    const std::vector<Instr>& instr_trace,
+    const std::vector<uint16_t>& rob_sizes_in) {
   if (instr_trace.empty()) return {};
 
   std::vector<RobLatencyData> results;
 
-  // ROB sizes: {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
+  // Default sweep: {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
   std::vector<uint16_t> rob_sizes;
-  for (uint16_t size = 1; size <= 1024; size *= 2) {
-    rob_sizes.push_back(size);
+  if (rob_sizes_in.empty()) {
+    for (uint16_t size = 1; size <= 1024; size *= 2) {
+      rob_sizes.push_back(size);
+    }
+  } else {
+    rob_sizes = rob_sizes_in;
   }
 
   std::cout << "\nRunning ROB latency analysis for " << rob_sizes.size()

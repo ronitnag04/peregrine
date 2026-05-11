@@ -162,6 +162,13 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  // ROB latency analysis is always run for the default 11-size sweep
+  // ({1,2,4,...,1024}). Downstream models consume per-size features
+  // (rob1_issue_*, rob2_issue_*, ...); narrowing to the config's rob_size
+  // would break that feature set. Leave this empty so the C++ side falls
+  // back to its built-in default list.
+  std::vector<uint16_t> rob_sizes_for_analysis;
+
   std::cout << "\nParsing and converting trace...\n";
   std::vector<analytical::Instr> instrs =
       analytical::parse_and_convert(csv_file);
@@ -192,7 +199,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\nCalculating ROB latency analysis...\n";
     std::vector<analytical::RobLatencyData> latency_data =
-        analytical::get_rob_latency_analysis(instrs);
+        analytical::get_rob_latency_analysis(instrs, rob_sizes_for_analysis);
 
     std::cout << "\nExporting latency analysis to " << output_dir << " ...\n";
     analytical::export_latency_analysis(latency_data, output_dir);
@@ -235,7 +242,7 @@ int main(int argc, char* argv[]) {
       analytical::export_throughputs(thr_dep, cfg_dir);
 
       std::vector<analytical::RobLatencyData> lat =
-          analytical::get_rob_latency_analysis(instrs);
+          analytical::get_rob_latency_analysis(instrs, rob_sizes_for_analysis);
       analytical::export_latency_analysis(lat, cfg_dir);
 
       std::cout << "  [" << (cfg + 1) << "/" << npy.n_configs << "] config_"
