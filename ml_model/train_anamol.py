@@ -34,8 +34,7 @@ def _convert_memsize(val) -> float:
     return float(s)
 
 
-def _cache_paths(csv_path: str) -> dict[str, str]:
-    cache_dir = csv_path + ".cache"
+def _cache_paths(cache_dir: str) -> dict[str, str]:
     return {
         "dir": cache_dir,
         "features": os.path.join(cache_dir, "features.npy"),
@@ -45,24 +44,26 @@ def _cache_paths(csv_path: str) -> dict[str, str]:
     }
 
 
-def _cache_is_valid(csv_path: str) -> bool:
-    paths = _cache_paths(csv_path)
+def _cache_is_valid(cache_dir: str, csv_path: str | None = None) -> bool:
+    paths = _cache_paths(cache_dir)
     required = [paths["features"], paths["labels"], paths["ids"], paths["columns"]]
     if not all(os.path.exists(p) for p in required):
         return False
+    if csv_path is None:
+        return True
     csv_mtime = os.path.getmtime(csv_path)
     cache_mtime = min(os.path.getmtime(p) for p in required)
     return cache_mtime >= csv_mtime
 
 
-def build_cache(csv_path: str) -> None:
+def build_cache(csv_path: str, cache_dir: str) -> None:
     """Parse the CSV once and write a compact float32 cache next to it.
 
     The cache contains the preprocessed feature matrix (dropped/encoded columns
     already removed, memsize strings converted to bytes) so subsequent runs can
     skip CSV parsing entirely.
     """
-    paths = _cache_paths(csv_path)
+    paths = _cache_paths(cache_dir)
     os.makedirs(paths["dir"], exist_ok=True)
 
     header = pd.read_csv(csv_path, nrows=0).columns.tolist()
@@ -117,16 +118,29 @@ def build_cache(csv_path: str) -> None:
     print(f"  [cache] wrote {paths['dir']}")
 
 
-def load_dataset(csv_path: str) -> tuple[np.ndarray, np.ndarray, pd.DataFrame, list[str]]:
+def load_dataset(dataset_path: str) -> tuple[np.ndarray, np.ndarray, pd.DataFrame, list[str]]:
     """Return (features_memmap, labels, ids, feature_columns).
+
+    Accepts either the source CSV (in which case a cache is built next to it
+    as ``<csv>.cache/``) or a pre-built cache directory.
 
     features is a read-only float32 memmap; labels is a float32 ndarray;
     ids is a DataFrame with benchmark/checkpoint/fast_forward.
     """
-    if not _cache_is_valid(csv_path):
-        print(f"Building cache for {csv_path} (one-time; ~14GB CSV)")
-        build_cache(csv_path)
-    paths = _cache_paths(csv_path)
+    if os.path.isdir(dataset_path):
+        cache_dir = dataset_path.rstrip("/")
+        if not _cache_is_valid(cache_dir):
+            raise FileNotFoundError(
+                f"{cache_dir} is a directory but does not contain a complete cache "
+                f"(expected features.npy, labels.npy, ids.pkl, columns.json)"
+            )
+    else:
+        csv_path = dataset_path
+        cache_dir = csv_path + ".cache"
+        if not _cache_is_valid(cache_dir, csv_path):
+            print(f"Building cache for {cache_dir} (one-time; ~14GB CSV)")
+            build_cache(csv_path, cache_dir)
+    paths = _cache_paths(cache_dir)
     features = np.load(paths["features"], mmap_mode="r")
     labels = np.load(paths["labels"])
     ids = pd.read_pickle(paths["ids"])
